@@ -1,0 +1,2 @@
+# QuickStreamAppAdd
+将工作目录所有快捷方式一键导入到sunshine应用程序并自动处理封面
