@@ -111,7 +111,7 @@ def generate_app_entry(lnk_file, index):
     entry = {
         "name": os.path.splitext(lnk_file)[0],  # 使用快捷方式文件名作为名称
         "output": "",
-        "cmd": f"{os.path.abspath(lnk_file)}",
+        "cmd": "",
         "exclude-global-prep-cmd": "false",
         "elevated": "false",
         "auto-detach": "true",
@@ -119,6 +119,9 @@ def generate_app_entry(lnk_file, index):
         "exit-timeout": "5",
         "menu-cmd": "",
         "image-path": f"C:\\Program Files\\Sunshine\\assets\\output_image\\output_image{index}.png",
+        "detached": [
+            f"\"{os.path.abspath(lnk_file)}\""
+        ]
     }
     return entry
 
@@ -157,7 +160,7 @@ def main():
 
     # 加载现有的 apps.json 文件
     apps_json_path = r"C:\Program Files\Sunshine\config\apps.json"  # 修改为你的 apps.json 文件路径
-    input(f"该应用会创建《{output_folder}》文件夹来存放输出的图像\n修改以下文件《{apps_json_path}》来添加sunshine应用程序\n按回车继续...")
+    input(f"该应用会创建《{output_folder}》文件夹来存放输出的图像\n修改以下文件《{apps_json_path}》来添加sunshine应用程序\n这个ex版本会将应用放置在独立命令处。效果为退出串流不退出游戏，退出游戏不退出串流\n若不需要这种效果请选择普通版本\n按回车继续...")
     
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
