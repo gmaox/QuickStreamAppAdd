@@ -1,7 +1,7 @@
 import sys
 import json
 import pygame
-from PyQt5.QtWidgets import QApplication, QVBoxLayout, QGridLayout, QWidget, QPushButton, QLabel, QHBoxLayout, QFileDialog, QSlider, QTextEdit, QProgressBar, QScrollArea
+from PyQt5.QtWidgets import QApplication, QVBoxLayout, QGridLayout, QWidget, QPushButton, QLabel, QHBoxLayout, QFileDialog, QSlider, QTextEdit, QProgressBar, QScrollArea, QFrame
 from PyQt5.QtGui import QPixmap, QIcon
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 import subprocess
@@ -28,29 +28,20 @@ games = [
 
 # 读取设置文件
 settings_path = "set.json"
+settings = {
+    "favorites": [],
+    "last_played": [],
+    "more_favorites": [],
+    "more_last_used": [],
+    "extra_paths": []
+}
+
 try:
     if os.path.exists(settings_path):
         with open(settings_path, "r", encoding="utf-8") as f:
             settings = json.load(f)
-    else:
-        settings = {
-            "favorites": [],
-            "last_played": [],
-            "more_favorites": [],
-            "more_last_used": [],
-            "extra_paths": []
-        }
-        with open(settings_path, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=4)
 except Exception as e:
     print(f"Error loading settings: {e}")
-    settings = {
-        "favorites": [],
-        "last_played": [],
-        "more_favorites": [],
-        "more_last_used": [],
-        "extra_paths": []
-    }
 
 def get_lnk_files():
     # 获取当前工作目录下的所有 .lnk 文件
@@ -317,7 +308,11 @@ class GameSelector(QWidget):
 
         # 创建游戏标题标签
         sorted_games = self.sort_games()
-        self.game_name_label = QLabel(sorted_games[self.current_index]["name"])
+        if sorted_games:  # 检查是否有游戏
+            self.game_name_label = QLabel(sorted_games[self.current_index]["name"])
+        else:
+            self.game_name_label = QLabel("没有找到游戏")  # 显示提示信息
+        
         self.game_name_label.setAlignment(Qt.AlignCenter)
         self.game_name_label.setStyleSheet("""
             QLabel {
@@ -345,11 +340,26 @@ class GameSelector(QWidget):
         
         # 添加游戏按钮
         self.buttons = []
-        sorted_games = self.sort_games()
-        for index, game in enumerate(sorted_games):
-            button = self.create_game_button(game, index)
-            self.grid_layout.addWidget(button, index // self.row_count, index % self.row_count)
-            self.buttons.append(button)
+        if sorted_games:  # 只在有游戏时添加按钮
+            for index, game in enumerate(sorted_games):
+                button = self.create_game_button(game, index)
+                self.grid_layout.addWidget(button, index // self.row_count, index % self.row_count)
+                self.buttons.append(button)
+        else:
+            # 添加一个提示按钮
+            no_games_button = QPushButton("请点击-更多-按钮添加含有快捷方式的目录后\n使用-设置-刷新游戏-按钮添加主页面游戏")
+            no_games_button.setFixedSize(700, 200)
+            no_games_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #2e2e2e; 
+                    border-radius: 10px; 
+                    border: 2px solid #444444;
+                    color: white;
+                    font-size: 30px;
+                }
+            """)
+            self.grid_layout.addWidget(no_games_button, 0, 0)
+            self.buttons.append(no_games_button)
 
         # 获取排序后的游戏列表
         sorted_games = self.sort_games()
@@ -465,7 +475,19 @@ class GameSelector(QWidget):
 
     def update_highlight(self):
         """高亮当前选中的游戏按钮，并更新游戏名称"""
-        sorted_games = self.sort_games()  # 获取排序后的游戏列表
+        sorted_games = self.sort_games()
+        
+        # 检查是否有游戏
+        if not sorted_games:
+            self.game_name_label.setText("没有找到游戏")
+            return
+        
+        # 确保 current_index 不超出范围
+        if self.current_index >= len(sorted_games):
+            self.current_index = len(sorted_games) - 1
+        
+        # 更新游戏名称标签
+        self.game_name_label.setText(sorted_games[self.current_index]["name"])
         
         for index, button in enumerate(self.buttons):
             if index == self.current_index:
@@ -490,20 +512,17 @@ class GameSelector(QWidget):
                         border: 2px solid #888888;
                     }
                 """)
-        
-        # 更新顶部游戏名称，使用排序后的游戏列表
-        self.game_name_label.setText(sorted_games[self.current_index]["name"])
 
-        # 计算当前按钮的位置并调整滚动条
-        current_button = self.buttons[self.current_index]
-        button_pos = current_button.mapTo(self.scroll_widget, current_button.pos())
-        scroll_area_height = self.scroll_area.viewport().height()
+        # 只在有按钮时进行滚动条调整
+        if self.buttons:
+            current_button = self.buttons[self.current_index]
+            button_pos = current_button.mapTo(self.scroll_widget, current_button.pos())
+            scroll_area_height = self.scroll_area.viewport().height()
 
-        # 如果按钮在可见区域之外，则调整滚动条
-        if button_pos.y() < self.scroll_area.verticalScrollBar().value():
-            self.scroll_area.verticalScrollBar().setValue(button_pos.y())
-        elif button_pos.y() + current_button.height() > self.scroll_area.verticalScrollBar().value() + scroll_area_height:
-            self.scroll_area.verticalScrollBar().setValue(button_pos.y() + current_button.height() - scroll_area_height)
+            if button_pos.y() < self.scroll_area.verticalScrollBar().value():
+                self.scroll_area.verticalScrollBar().setValue(button_pos.y())
+            elif button_pos.y() + current_button.height() > self.scroll_area.verticalScrollBar().value() + scroll_area_height:
+                self.scroll_area.verticalScrollBar().setValue(button_pos.y() + current_button.height() - scroll_area_height)
 
     def keyPressEvent(self, event):
         """处理键盘事件"""
@@ -785,6 +804,12 @@ class GameSelector(QWidget):
         except Exception as e:
             print(f"无法以管理员权限重新运行程序: {e}")
 
+    def restart_program(self):
+        """重启程序"""
+        QApplication.quit()
+        # 只传递可执行文件的路径，不传递其他参数
+        subprocess.Popen([sys.executable])
+
     def refresh_games(self):
         """刷新游戏列表，处理 extra_paths 中的快捷方式"""
         if not self.is_admin():
@@ -799,7 +824,7 @@ class GameSelector(QWidget):
         self.refresh_thread = RefreshThread(extra_paths)
         self.refresh_thread.progress_signal.connect(progress_window.update_progress)
         self.refresh_thread.finished.connect(progress_window.close)
-        self.refresh_thread.finished.connect(self.reload_interface)
+        self.refresh_thread.finished.connect(self.restart_program)
         self.refresh_thread.start()
 
 class ProgressWindow(QWidget):
@@ -1107,7 +1132,6 @@ class FloatingWindow(QWidget):
             }
         """)
         select_folder_btn.clicked.connect(self.select_folder)
-        self.buttons.append(select_folder_btn)
         self.layout.addWidget(select_folder_btn)
     
     def select_folder(self):
@@ -1220,6 +1244,15 @@ class FloatingWindow(QWidget):
         self.buttons.clear()
         self.create_buttons()
         self.update_highlight()
+
+    def keyPressEvent(self, event):
+        """处理键盘事件"""
+        if event.key() == Qt.Key_Up:
+            self.current_index = (self.current_index - 1) % len(self.buttons)
+            self.update_highlight()
+        elif event.key() == Qt.Key_Down:
+            self.current_index = (self.current_index + 1) % len(self.buttons)
+            self.update_highlight()
 
 class ControllerMapping:
     """手柄按键映射类"""
@@ -1343,6 +1376,7 @@ class SettingsWindow(QWidget):
         # 添加调整 row_count 的选项
         self.row_count_label = QLabel(f"每行游戏数量: {parent.row_count}")
         self.row_count_label.setStyleSheet("color: white; font-size: 16px;")
+        self.row_count_label.setFixedHeight(30)  # 固定高度为30像素
         self.layout.addWidget(self.row_count_label)
 
         self.row_count_slider = QSlider(Qt.Horizontal)
@@ -1358,8 +1392,10 @@ class SettingsWindow(QWidget):
             QPushButton {
                 background-color: #444444;
                 color: white;
-                padding: 5px;
-                border-radius: 5px;
+                text-align: center;
+                padding: 10px;
+                border: none;
+                font-size: 16px;
             }
             QPushButton:hover {
                 background-color: #555555;
@@ -1369,31 +1405,33 @@ class SettingsWindow(QWidget):
         self.layout.addWidget(restart_button)
 
         # 添加编辑 extra_paths 的选项
-        self.extra_paths_button = QPushButton("编辑文件夹路径")
+        self.extra_paths_button = QPushButton("查看作用文件夹路径")
         self.extra_paths_button.setStyleSheet("""
             QPushButton {
-                background-color: transparent;
+                background-color: #444444;
                 color: white;
-                text-align: left;
+                text-align: center;
                 padding: 10px;
                 border: none;
                 font-size: 16px;
             }
             QPushButton:hover {
-                background-color: rgba(255, 255, 255, 0.1);
+                background-color: #555555;
             }
         """)
-        self.extra_paths_button.clicked.connect(self.edit_extra_paths)
+        self.extra_paths_button.clicked.connect(self.toggle_extra_paths)
         self.layout.addWidget(self.extra_paths_button)
 
         # 添加刷新游戏按钮
-        self.refresh_button = QPushButton("刷新游戏")
+        self.refresh_button = QPushButton("---刷新游戏---")
         self.refresh_button.setStyleSheet("""
             QPushButton {
                 background-color: #444444;
                 color: white;
-                padding: 5px;
-                border-radius: 5px;
+                text-align: center;
+                padding: 15px;
+                border: none;
+                font-size: 16px;
             }
             QPushButton:hover {
                 background-color: #555555;
@@ -1401,6 +1439,164 @@ class SettingsWindow(QWidget):
         """)
         self.refresh_button.clicked.connect(parent.refresh_games)
         self.layout.addWidget(self.refresh_button)
+
+        # 添加打开快捷方式文件夹按钮
+        self.open_folder_button = QPushButton("打开目标文件夹")
+        self.open_folder_button.setStyleSheet("""
+            QPushButton {
+                background-color: #444444;
+                color: white;
+                text-align: center;
+                padding: 10px;
+                border: none;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background-color: #555555;
+            }
+        """)
+        self.open_folder_button.clicked.connect(self.open_shortcut_folder)
+        self.layout.addWidget(self.open_folder_button)
+
+        # 添加新增快捷方式按钮
+        self.add_shortcut_button = QPushButton("新增快捷方式到首文件夹")
+        self.add_shortcut_button.setStyleSheet("""
+            QPushButton {
+                background-color: #444444;
+                color: white;
+                text-align: center;
+                padding: 10px;
+                border: none;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background-color: #555555;
+            }
+        """)
+        self.add_shortcut_button.clicked.connect(self.add_shortcut)
+        self.layout.addWidget(self.add_shortcut_button)
+
+        # 创建一个 QFrame 来容纳路径按钮
+        self.paths_frame = QFrame(self)
+        self.paths_frame.setStyleSheet("""
+            QFrame {
+                background-color: #333333;
+                border-radius: 5px;
+                border: 1px solid #444444;
+            }
+        """)
+        self.paths_frame.setVisible(False)  # 初始时隐藏
+        self.paths_layout = QVBoxLayout(self.paths_frame)
+        self.layout.addWidget(self.paths_frame)
+
+    def toggle_extra_paths(self):
+        """切换显示或隐藏 extra_paths"""
+        if self.paths_frame.isVisible():
+            # 隐藏文件夹路径
+            self.paths_frame.setVisible(False)
+        else:
+            # 显示文件夹路径
+            self.edit_extra_paths()
+            self.paths_frame.setVisible(True)
+
+    def edit_extra_paths(self):
+        """编辑 extra_paths"""
+        # 清除现有的路径按钮
+        for i in reversed(range(self.paths_layout.count())):
+            widget = self.paths_layout.itemAt(i).widget()
+            if widget is not None:
+                widget.setParent(None)
+
+        # 为每个路径创建一个按钮
+        for path in settings["extra_paths"]:
+            path_button = QPushButton(path)
+            path_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #444444;
+                    color: white;
+                    text-align: center;
+                    padding: 10px;
+                    border: none;
+                    font-size: 16px;
+                }
+                QPushButton:hover {
+                    background-color: #555555;
+                }
+            """)
+            path_button.clicked.connect(lambda checked, p=path, btn=path_button: self.handle_path_button_click(p, btn))
+            self.paths_layout.addWidget(path_button)
+
+    def handle_path_button_click(self, path, button):
+        """处理路径按钮点击事件"""
+        if button.property("clicked_once"):
+            # 第二次点击，删除路径
+            self.remove_path(path)
+        else:
+            # 第一次点击，变红色并更改文本
+            button.setStyleSheet("""
+                QPushButton {
+                    background-color: red;
+                    color: white;
+                    text-align: center;
+                    padding: 10px;
+                    border: none;
+                    font-size: 16px;
+                }
+            """)
+            button.setText("删除？(再次点击确认)")
+            button.setProperty("clicked_once", True)
+
+    def remove_path(self, path):
+        """删除路径并更新设置"""
+        if path in settings["extra_paths"]:
+            settings["extra_paths"].remove(path)
+
+            # 保存设置
+            with open(settings_path, "w", encoding="utf-8") as f:
+                json.dump(settings, f, indent=4)
+
+            # 重新加载按钮
+            self.edit_extra_paths()
+
+    def update_highlight(self):
+        """更新高亮状态（当前未实现）"""
+        pass
+
+    def open_shortcut_folder(self):
+        """打开 extra_paths 的第一个文件夹"""
+        if settings["extra_paths"]:
+            first_path = settings["extra_paths"][0]
+            if os.path.exists(first_path):
+                os.startfile(first_path)
+            else:
+                print(f"路径不存在: {first_path}")
+
+    def add_shortcut(self):
+        """新增快捷方式到 extra_paths 的第一个文件夹"""
+        if not settings["extra_paths"]:
+            print("没有可用的目标文件夹")
+            return
+
+        first_path = settings["extra_paths"][0]
+        if not os.path.exists(first_path):
+            print(f"路径不存在: {first_path}")
+            return
+
+        # 弹出文件选择框
+        file_dialog = QFileDialog(self, "选择一个可执行文件", "", "Executable Files (*.exe)")
+        file_dialog.setFileMode(QFileDialog.ExistingFile)
+        if file_dialog.exec_():
+            selected_file = file_dialog.selectedFiles()[0]
+            shortcut_name = os.path.splitext(os.path.basename(selected_file))[0] + ".lnk"
+            shortcut_path = os.path.join(first_path, shortcut_name)
+
+            # 创建快捷方式
+            shell = win32com.client.Dispatch("WScript.Shell")
+            shortcut = shell.CreateShortCut(shortcut_path)
+            shortcut.TargetPath = selected_file
+            shortcut.WorkingDirectory = os.path.dirname(selected_file)
+            shortcut.save()
+            print(f"快捷方式已创建: {shortcut_path}")
 
     def update_row_count(self, value):
         """更新每行游戏数量并保存设置"""
@@ -1416,45 +1612,8 @@ class SettingsWindow(QWidget):
     def restart_program(self):
         """重启程序"""
         QApplication.quit()
-        subprocess.Popen(sys.argv)
-
-    def edit_extra_paths(self):
-        """编辑 extra_paths"""
-        extra_paths_text = "\n".join(settings["extra_paths"])
-        self.extra_paths_textbox = QTextEdit(extra_paths_text)
-        self.extra_paths_textbox.setStyleSheet("color: white; background-color: #2e2e2e;")
-        self.layout.addWidget(self.extra_paths_textbox)
-
-        save_button = QPushButton("保存")
-        save_button.setStyleSheet("""
-            QPushButton {
-                background-color: #444444;
-                color: white;
-                padding: 5px;
-                border-radius: 5px;
-            }
-            QPushButton:hover {
-                background-color: #555555;
-            }
-        """)
-        save_button.clicked.connect(self.save_extra_paths)
-        self.layout.addWidget(save_button)
-
-    def save_extra_paths(self):
-        """保存 extra_paths"""
-        new_paths = self.extra_paths_textbox.toPlainText().split("\n")
-        settings["extra_paths"] = [path.strip() for path in new_paths if path.strip()]
-
-        # 保存设置
-        with open(settings_path, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=4)
-
-        # 重新加载按钮
-        self.parent().reload_interface()
-
-    def update_highlight(self):
-        """更新高亮状态（当前未实现）"""
-        pass
+        # 只传递可执行文件的路径，不传递其他参数
+        subprocess.Popen([sys.executable])
 
 # 应用程序入口
 if __name__ == "__main__":
@@ -1462,8 +1621,14 @@ if __name__ == "__main__":
     selector = GameSelector()
     selector.show()
 
+    # 打印 sys.argv 以调试参数传递
+    print("启动参数:", sys.argv)
+
+    # 去除重复的路径
+    unique_args = list(dict.fromkeys(sys.argv))
+
     # 检查启动参数，如果包含 'refresh'，则立即执行刷新逻辑
-    if len(sys.argv) > 1 and sys.argv[1] == "refresh":
+    if len(unique_args) > 1 and unique_args[1] == "refresh":
         selector.refresh_games()
 
     sys.exit(app.exec_())
