@@ -1617,13 +1617,23 @@ class SettingsWindow(QWidget):
 
 # 应用程序入口
 if __name__ == "__main__":
+    # 获取程序所在目录
+    if getattr(sys, 'frozen', False):
+        # 如果是打包后的可执行文件
+        program_directory = os.path.dirname(sys.executable)
+    else:
+        # 如果是脚本运行
+        program_directory = os.path.dirname(os.path.abspath(__file__))
+    
+    # 将工作目录更改为上一级目录
+    os.chdir(program_directory)
+    
+    # 打印当前工作目录
+    print("当前工作目录:", os.getcwd())
+
     app = QApplication(sys.argv)
     selector = GameSelector()
     selector.show()
-
-    # 打印 sys.argv 以调试参数传递
-    print("启动参数:", sys.argv)
-
     # 去除重复的路径
     unique_args = list(dict.fromkeys(sys.argv))
 
