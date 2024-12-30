@@ -1,7 +1,7 @@
 import sys
 import json
 import pygame
-from PyQt5.QtWidgets import QApplication, QVBoxLayout, QGridLayout, QWidget, QPushButton, QLabel, QHBoxLayout, QFileDialog, QSlider, QTextEdit, QProgressBar
+from PyQt5.QtWidgets import QApplication, QVBoxLayout, QGridLayout, QWidget, QPushButton, QLabel, QHBoxLayout, QFileDialog, QSlider, QTextEdit, QProgressBar, QScrollArea
 from PyQt5.QtGui import QPixmap, QIcon
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 import subprocess
@@ -357,7 +357,32 @@ class GameSelector(QWidget):
         # 主布局
         main_layout = QVBoxLayout()
         main_layout.addLayout(self.top_layout)  # 添加顶部布局
-        main_layout.addLayout(self.grid_layout)  # 添加游戏按钮网格
+
+        # 创建一个新的布局容器用于放置游戏按钮网格
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFixedHeight(int(self.height() * 0.9))  # 设置高度为90%
+        self.scroll_area.setFixedWidth(int(self.width()))  # 设置宽度为100%
+
+        # 隐藏滚动条和边框
+        self.scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: none;
+            }
+            QScrollBar:vertical, QScrollBar:horizontal {
+                width: 0px;
+                height: 0px;
+            }
+        """)
+
+        # 创建一个 QWidget 作为滚动区域的容器
+        self.scroll_widget = QWidget()
+        self.scroll_widget.setLayout(self.grid_layout)
+        self.scroll_area.setWidget(self.scroll_widget)
+
+        # 将滚动区域添加到主布局
+        main_layout.addWidget(self.scroll_area)
+
         self.setLayout(main_layout)
 
         # 启动手柄输入监听线程
@@ -466,8 +491,19 @@ class GameSelector(QWidget):
                     }
                 """)
         
-        # 更新顶部游戏名称，使用排序���的游戏列表
+        # 更新顶部游戏名称，使用排序后的游戏列表
         self.game_name_label.setText(sorted_games[self.current_index]["name"])
+
+        # 计算当前按钮的位置并调整滚动条
+        current_button = self.buttons[self.current_index]
+        button_pos = current_button.mapTo(self.scroll_widget, current_button.pos())
+        scroll_area_height = self.scroll_area.viewport().height()
+
+        # 如果按钮在可见区域之外，则调整滚动条
+        if button_pos.y() < self.scroll_area.verticalScrollBar().value():
+            self.scroll_area.verticalScrollBar().setValue(button_pos.y())
+        elif button_pos.y() + current_button.height() > self.scroll_area.verticalScrollBar().value() + scroll_area_height:
+            self.scroll_area.verticalScrollBar().setValue(button_pos.y() + current_button.height() - scroll_area_height)
 
     def keyPressEvent(self, event):
         """处理键盘事件"""
