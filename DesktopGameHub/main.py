@@ -1,12 +1,19 @@
 import sys
 import json
 import pygame
-from PyQt5.QtWidgets import QApplication, QVBoxLayout, QGridLayout, QWidget, QPushButton, QLabel, QHBoxLayout, QFileDialog, QSlider, QTextEdit
+from PyQt5.QtWidgets import QApplication, QVBoxLayout, QGridLayout, QWidget, QPushButton, QLabel, QHBoxLayout, QFileDialog, QSlider, QTextEdit, QProgressBar
 from PyQt5.QtGui import QPixmap, QIcon
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 import subprocess
 import time
 import os
+import ctypes
+import glob
+import win32com.client  # 用于解析 .lnk 文件
+from icoextract import IconExtractor, IconExtractorError
+from PIL import Image, ImageDraw
+from colorthief import ColorThief
+from io import BytesIO
 
 # 读取 JSON 数据
 json_path = r"C:\Program Files\Sunshine\config\apps.json"
@@ -44,6 +51,179 @@ except Exception as e:
         "more_last_used": [],
         "extra_paths": []
     }
+
+def get_lnk_files():
+    # 获取当前工作目录下的所有 .lnk 文件
+    lnk_files = glob.glob("*.lnk")
+    valid_lnk_files = []
+    
+    # 过滤掉指向文件夹的快捷方式
+    for lnk in lnk_files:
+        try:
+            target_path = get_target_path_from_lnk(lnk)
+            # 只保留指向可执行文件的快捷方式
+            if os.path.isdir(target_path):
+                print(f"跳过文件夹快捷方式: {lnk} -> {target_path}")
+            else:
+                valid_lnk_files.append(lnk)
+        except Exception as e:
+            print(f"无法获取 {lnk} 的目标路径: {e}")
+    
+    print("找到的 .lnk 文件:")
+    for idx, lnk in enumerate(valid_lnk_files):
+        print(f"{idx+1}. {lnk}")
+    return valid_lnk_files
+
+def get_target_path_from_lnk(lnk_file):
+    # 使用 win32com 获取快捷方式目标路径
+    shell = win32com.client.Dispatch("WScript.Shell")
+    shortcut = shell.CreateShortCut(lnk_file)
+    return shortcut.TargetPath
+
+def extract_icon(exe_path):
+    try:
+        extractor = IconExtractor(exe_path)
+        output_icon_path = "temp_icon.ico"
+        extractor.export_icon(output_icon_path, num=0)
+        return output_icon_path
+    except IconExtractorError as e:
+        print(f"提取图标失败: {e}")
+        return None
+
+def get_dominant_colors(image, num_colors=2):
+    with BytesIO() as output:
+        image.save(output, format="PNG")
+        img_bytes = output.getvalue()
+
+    color_thief = ColorThief(BytesIO(img_bytes))
+    return color_thief.get_palette(color_count=num_colors)
+
+def create_image_with_icon(exe_path, output_path):
+    try:
+        icon_path = extract_icon(exe_path)
+        if icon_path is None:
+            print(f"无法提取图标: {exe_path}")
+            return
+
+        with Image.open(icon_path) as icon_img:
+            icon_width, icon_height = icon_img.size
+            dominant_colors = get_dominant_colors(icon_img)
+            color1, color2 = dominant_colors[0], dominant_colors[1]
+
+            img = Image.new('RGBA', (600, 800), color=(255, 255, 255, 0))
+            draw = ImageDraw.Draw(img)
+
+            for y in range(800):
+                for x in range(600):
+                    ratio_x = x / 600
+                    ratio_y = y / 800
+                    ratio = (ratio_x + ratio_y) / 2
+                    r = int(color1[0] * (1 - ratio) + color2[0] * ratio)
+                    g = int(color1[1] * (1 - ratio) + color2[1] * ratio)
+                    b = int(color1[2] * (1 - ratio) + color2[2] * ratio)
+                    draw.point((x, y), fill=(r, g, b, 255))
+
+            icon_x = (600 - icon_width) // 2
+            icon_y = (800 - icon_height) // 2
+            img.paste(icon_img, (icon_x, icon_y), icon_img)
+
+            img.save(output_path, format="PNG")
+            print(f"图像已保存至 {output_path}")
+
+        try:
+            os.remove(icon_path)
+            print(f"\n {exe_path}\n")
+        except PermissionError:
+            print(f"无法删除临时图标文件: {icon_path}. 稍后再试.")
+            time.sleep(1)
+            os.remove(icon_path)
+
+    except Exception as e:
+        print(f"创建图像时发生异常，跳过此文件: {exe_path}\n异常信息: {e}")
+
+def load_apps_json(json_path):
+    # 加载已有的 apps.json
+    if os.path.exists(json_path):
+        with open(json_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    else:
+        # 如果文件不存在，返回一个空的基础结构
+        return {"env": "", "apps": []}
+
+def generate_app_entry(lnk_file, index):
+    # 为每个快捷方式生成对应的 app 条目
+    entry = {
+        "name": os.path.splitext(lnk_file)[0],  # 使用快捷方式文件名作为名称
+        "output": "",
+        "cmd": f"{os.path.abspath(lnk_file)}",
+        "exclude-global-prep-cmd": "false",
+        "elevated": "false",
+        "auto-detach": "true",
+        "wait-all": "true",
+        "exit-timeout": "5",
+        "menu-cmd": "",
+        "image-path": f"C:\\Program Files\\Sunshine\\assets\\output_image\\output_image{index}.png",
+    }
+    return entry
+
+def add_entries_to_apps_json(valid_lnk_files, apps_json):
+    # 删除现有 apps.json 中与有效 .lnk 文件 name 相同的条目
+    app_names = {entry['name'] for entry in apps_json['apps']}
+    for lnk_file in valid_lnk_files:
+        # 如果 name 已存在，则删除
+        if lnk_file in app_names:
+            apps_json['apps'] = [entry for entry in apps_json['apps'] if entry['name'] != lnk_file]
+    
+    # 为每个有效的快捷方式生成新的条目并添加到 apps 中
+    for index, lnk_file in enumerate(valid_lnk_files):
+        app_entry = generate_app_entry(lnk_file, index)
+        apps_json["apps"].append(app_entry)
+
+def remove_entries_with_output_image(apps_json):
+    # 删除 apps.json 中包含 "output_image" 的条目
+    apps_json['apps'] = [
+        entry for entry in apps_json['apps'] if "output_image" not in entry.get("image-path", "")
+    ]
+    print("已删除包含 'output_image' 的条目")
+
+def save_apps_json(apps_json, file_path):
+    # 将更新后的 apps.json 保存到文件
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(apps_json, f, ensure_ascii=False, indent=4)
+
+class RefreshThread(QThread):
+    progress_signal = pyqtSignal(int, int)  # 当前进度和总数
+
+    def __init__(self, extra_paths, parent=None):
+        super().__init__(parent)
+        self.extra_paths = extra_paths
+
+    def run(self):
+        valid_lnk_files = []
+        for path in self.extra_paths:
+            if os.path.exists(path):
+                os.chdir(path)  # 切换到路径
+                valid_lnk_files.extend(get_lnk_files())
+
+        target_paths = [get_target_path_from_lnk(lnk) for lnk in valid_lnk_files]
+
+        output_folder = r"C:\Program Files\Sunshine\assets\output_image"
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
+
+        apps_json_path = r"C:\Program Files\Sunshine\config\apps.json"
+        apps_json = load_apps_json(apps_json_path)
+
+        remove_entries_with_output_image(apps_json)
+
+        total_files = len(target_paths)
+        for idx, target_path in enumerate(target_paths):
+            output_path = os.path.join(output_folder, f"output_image{idx}.png")
+            create_image_with_icon(target_path, output_path)
+            self.progress_signal.emit(idx + 1, total_files)  # 发射进度信号
+
+        add_entries_to_apps_json(valid_lnk_files, apps_json)
+        save_apps_json(apps_json, apps_json_path)
 
 class GameSelector(QWidget): 
     def __init__(self):
@@ -286,7 +466,7 @@ class GameSelector(QWidget):
                     }
                 """)
         
-        # 更新顶部游戏名称，使用排序后的游戏列表
+        # 更新顶部游戏名称，使用排序���的游戏列表
         self.game_name_label.setText(sorted_games[self.current_index]["name"])
 
     def keyPressEvent(self, event):
@@ -551,6 +731,79 @@ class GameSelector(QWidget):
         self.settings_window.show()
         self.settings_window.update_highlight()
 
+    def is_admin(self):
+        """检查当前进程是否具有管理员权限"""
+        try:
+            return ctypes.windll.shell32.IsUserAnAdmin()
+        except:
+            return False
+
+    def run_as_admin(self):
+        """以管理员权限重新运行程序"""
+        try:
+            # 传递启动参数 'refresh'，以便在新程序中执行刷新逻辑
+            ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", sys.executable, " ".join(sys.argv) + " refresh", None, 1
+            )
+            sys.exit()  # 关闭原程序
+        except Exception as e:
+            print(f"无法以管理员权限重新运行程序: {e}")
+
+    def refresh_games(self):
+        """刷新游戏列表，处理 extra_paths 中的快捷方式"""
+        if not self.is_admin():
+            print("需要管理员权限才能刷新游戏列表。尝试获取管理员权限...")
+            self.run_as_admin()
+            return
+
+        progress_window = ProgressWindow(self)
+        progress_window.show()
+
+        extra_paths = settings.get("extra_paths", [])
+        self.refresh_thread = RefreshThread(extra_paths)
+        self.refresh_thread.progress_signal.connect(progress_window.update_progress)
+        self.refresh_thread.finished.connect(progress_window.close)
+        self.refresh_thread.finished.connect(self.reload_interface)
+        self.refresh_thread.start()
+
+class ProgressWindow(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setStyleSheet("""
+            QWidget {
+                background-color: rgba(46, 46, 46, 0.95);
+                border-radius: 10px;
+                border: 2px solid #444444;
+            }
+        """)
+        self.setFixedSize(300, 100)
+
+        self.layout = QVBoxLayout(self)
+        self.layout.setSpacing(10)
+
+        self.label = QLabel("正在刷新游戏列表...")
+        self.label.setStyleSheet("color: white; font-size: 16px;")
+        self.layout.addWidget(self.label)
+
+        self.progress_bar = QProgressBar(self)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 2px solid #444444;
+                border-radius: 5px;
+                background: #2e2e2e;
+            }
+            QProgressBar::chunk {
+                background-color: #00ff00;
+                width: 20px;
+            }
+        """)
+        self.layout.addWidget(self.progress_bar)
+
+    def update_progress(self, current, total):
+        """更新进度条"""
+        self.progress_bar.setMaximum(total)
+        self.progress_bar.setValue(current)
 
 class GameControllerThread(QThread):
     """子线程用来监听手柄输入"""
@@ -717,7 +970,6 @@ class GameControllerThread(QThread):
                 time.sleep(0.01)
             except Exception as e:
                 print(f"Error in event loop: {e}")
-
 
 class FloatingWindow(QWidget):
     def __init__(self, parent=None):
@@ -933,7 +1185,6 @@ class FloatingWindow(QWidget):
         self.create_buttons()
         self.update_highlight()
 
-
 class ControllerMapping:
     """手柄按键映射类"""
     def __init__(self, controller):
@@ -1038,7 +1289,6 @@ class ControllerMapping:
             
         print(f"Detected controller: {self.controller_name}")
 
-
 class SettingsWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1100,6 +1350,22 @@ class SettingsWindow(QWidget):
         self.extra_paths_button.clicked.connect(self.edit_extra_paths)
         self.layout.addWidget(self.extra_paths_button)
 
+        # 添加刷新游戏按钮
+        self.refresh_button = QPushButton("刷新游戏")
+        self.refresh_button.setStyleSheet("""
+            QPushButton {
+                background-color: #444444;
+                color: white;
+                padding: 5px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #555555;
+            }
+        """)
+        self.refresh_button.clicked.connect(parent.refresh_games)
+        self.layout.addWidget(self.refresh_button)
+
     def update_row_count(self, value):
         """更新每行游戏数量并保存设置"""
         self.parent().row_count = value
@@ -1154,10 +1420,14 @@ class SettingsWindow(QWidget):
         """更新高亮状态（当前未实现）"""
         pass
 
-
 # 应用程序入口
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     selector = GameSelector()
     selector.show()
+
+    # 检查启动参数，如果包含 'refresh'，则立即执行刷新逻辑
+    if len(sys.argv) > 1 and sys.argv[1] == "refresh":
+        selector.refresh_games()
+
     sys.exit(app.exec_())
