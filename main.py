@@ -149,7 +149,7 @@ def generate_app_entry(lnk_file, index):
         entry = {
             "name": os.path.splitext(lnk_file)[0],  # 使用快捷方式文件名作为名称
             "output": "",
-            "cmd": f"{os.path.abspath(lnk_file)}",
+            "cmd": f"\"{os.path.abspath(lnk_file)}\"",
             "exclude-global-prep-cmd": "false",
             "elevated": "false",
             "auto-detach": "true",
