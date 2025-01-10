@@ -160,26 +160,28 @@ def generate_app_entry(lnk_file, index):
         }
     return entry
 
-def add_entries_to_apps_json(valid_lnk_files, apps_json):
-    # 删除现有 apps.json 中与有效 .lnk 文件 name 相同的条目
-    app_names = {entry['name'] for entry in apps_json['apps']}
-    for lnk_file in valid_lnk_files:
-        # 如果 name 已存在，则删除
-        if lnk_file in app_names:
-            apps_json['apps'] = [entry for entry in apps_json['apps'] if entry['name'] != lnk_file]
+def add_entries_to_apps_json(valid_lnk_files, apps_json, modified_target_paths,image_target_paths):
     
     # 为每个有效的快捷方式生成新的条目并添加到 apps 中
     for index, lnk_file in enumerate(valid_lnk_files):
-        app_entry = generate_app_entry(lnk_file, index)
+        # 检查是否在 modified_target_paths 中标记为存在
+        if any(target_path == lnk_file and is_existing for target_path, is_existing in modified_target_paths):
+            print(f"跳过已存在的条目: {lnk_file}")
+            continue  # 跳过已有条目的处理
+        matching_image_entry = next((item for item in image_target_paths if item[0] == lnk_file), None)
+        app_entry = generate_app_entry(lnk_file, matching_image_entry[1])
         if app_entry:  # 仅在 app_entry 不为 None 时添加
             apps_json["apps"].append(app_entry)
 
-def remove_entries_with_output_image(apps_json):
-    # 删除 apps.json 中包含 "output_image" 的条目
+def remove_entries_with_output_image(apps_json, base_names):
+    # 删除 apps.json 中包含 "output_image" 的条目，且 cmd 和 detached 字段不在 base_names 中
     apps_json['apps'] = [
-        entry for entry in apps_json['apps'] if "output_image" not in entry.get("image-path", "")
+        entry for entry in apps_json['apps'] 
+        if "output_image" not in entry.get("image-path", "") or 
+           (entry.get("cmd") and os.path.splitext(os.path.basename(entry["cmd"]))[0] in base_names) or 
+           (entry.get("detached") and any(os.path.splitext(os.path.basename(detached_item))[0] in base_names for detached_item in entry["detached"]))
     ]
-    print("已删除包含 'output_image' 的条目")
+    print("已删除不符合条件的条目")
 
 def save_apps_json(apps_json, file_path):
     # 将更新后的 apps.json 保存到文件
@@ -227,6 +229,14 @@ def restart_service():
     except requests.exceptions.RequestException as e:
         print(f"sunshine服务已重启")
 
+def find_unused_index(apps_json, image_target_paths):
+    existing_indices = {int(entry["image-path"].split("output_image")[-1].split(".png")[0]) for entry in apps_json['apps'] if "output_image" in entry.get("image-path", "")}
+    existing_indices = existing_indices.union({ima[1] for ima in image_target_paths})  # 使用 union 合并集合
+    index = 0
+    while index in existing_indices:
+        index += 1
+    return index
+
 def main():
     # 获取当前目录下所有有效的 .lnk 和 .url 文件
     lnk_files = get_lnk_files()
@@ -234,6 +244,7 @@ def main():
     
     target_paths = [get_target_path_from_lnk(lnk) for lnk in lnk_files]
     target_paths += [url[1] for url in url_files]  # 添加 .url 文件的目标路径
+    lnkandurl_files = lnk_files + [url[0] for url in url_files]
 
     # 确保目标文件夹存在
     output_folder = r"C:\Program Files\Sunshine\assets\output_image"  # 更改为适当的文件夹
@@ -247,22 +258,49 @@ def main():
 
     apps_json = load_apps_json(apps_json_path)
 
-    # 删除包含 "output_image" 的条目
-    remove_entries_with_output_image(apps_json)
+    # 检查 target_paths 是否与 apps.json 中的条目名称相同
+    existing_names1 = {os.path.splitext(os.path.basename(entry['cmd']))[0] for entry in apps_json['apps']}  # 处理 cmd 字段
+    existing_names2 = {os.path.splitext(os.path.basename(detached_item))[0] for entry in apps_json['apps'] if 'detached' in entry for detached_item in entry['detached']}  # 处理 detached 字段
+    modified_target_paths = []  # 确保在这里初始化
 
-    # 创建并处理图像
     for idx, target_path in enumerate(target_paths):
-        output_path = os.path.join(output_folder, f"output_image{idx}.png")
-        create_image_with_icon(target_path, output_path,idx)
+        name = lnkandurl_files[idx]  # 获取文件名作为名称
+        base_name = name.rsplit('.', 1)[0]
+        # 修正条件判断，确保正确识别 .lnk 和 .url 文件
+        if base_name in existing_names1 or base_name in existing_names2:
+            modified_target_paths.append((target_path, True))  # 添加特殊标识符
+        else:
+            modified_target_paths.append((target_path, False))  # 不存在则标记为 False
+    # 删除不存在的条目
+    remove_entries_with_output_image(apps_json,lnkandurl_files)
+    image_target_paths = []
+    # 创建并处理图像
+    for idx, (target_path, is_existing) in enumerate(modified_target_paths):
+        if is_existing:
+            print(f"跳过已存在的条目: {target_path}")
+            continue  # 跳过已有条目的处理
+        output_index = find_unused_index(apps_json, image_target_paths)  # 获取未使用的索引
+        image_target_paths.append((lnkandurl_files[idx], output_index))
+        output_path = os.path.join(output_folder, f"output_image{output_index}.png")
+        create_image_with_icon(target_path, output_path, idx)
+    #转换modified_target_paths
+    modified_target_paths1 = modified_target_paths
+    modified_target_paths = []
+    for idx, (target_path, is_existing) in enumerate(modified_target_paths1):
+        modified_target_paths.append((lnkandurl_files[idx], is_existing))
 
     # 添加新的快捷方式条目
-    add_entries_to_apps_json(lnk_files, apps_json)
+    add_entries_to_apps_json(lnk_files, apps_json, modified_target_paths, image_target_paths)
     
     # 处理 .url 文件的条目
     for index, (url_file, target_path) in enumerate(url_files, start=len(lnk_files)):
+        if any(target_path == url_file and is_existing for target_path, is_existing in modified_target_paths):
+            print(f"跳过已存在的条目: {url_file}")
+            continue  # 跳过已有条目的处理
         app_entry = generate_app_entry(url_file, index)
         if app_entry:  # 仅在 app_entry 不为 None 时添加
             apps_json["apps"].append(app_entry)
+
     # 保存更新后的 apps.json 文件
     save_apps_json(apps_json, apps_json_path)
     restart_service()
