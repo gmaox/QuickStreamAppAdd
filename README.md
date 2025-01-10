@@ -5,7 +5,7 @@
 
 界面一览：
 ![屏幕截图 2025-01-11 002841](https://github.com/user-attachments/assets/76edc8cd-aa77-4242-ba5d-d714d73aec0f)
-
+（伪排序：在名字前面加数字让moonlight里排序好看点）
 效果如下：
 
 ![屏幕截图 2024-11-28 192904](https://github.com/user-attachments/assets/e234c8a0-1f2f-4a07-a3f3-4386b2738740)
