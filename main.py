@@ -21,7 +21,8 @@ config = configparser.ConfigParser()
 config_file_path = 'config.ini'  # 配置文件路径
 onestart = True
 skipped_entries = []
-folder_selected = os.path.join(os.path.expanduser("~"), "Desktop")
+#folder_selected = os.path.join(os.path.expanduser("~"), "Desktop")
+folder_selected = ""
 close_after_completion = True  # 默认开启
 
 # 重定向print函数，使输出显示在tkinter的文本框中
@@ -299,6 +300,7 @@ def add_entries_to_apps_json(valid_lnk_files, apps_json, modified_target_paths,i
         app_entry = generate_app_entry(lnk_file, matching_image_entry[1])
         if app_entry:  # 仅在 app_entry 不为 None 时添加
             apps_json["apps"].append(app_entry)
+            print(f"新加入: {lnk_file}")
 
 def remove_entries_with_output_image(apps_json, base_names):
     # 删除 apps.json 中包含 "output_image" 的条目，且 cmd 和 detached 字段不在 base_names 中
@@ -405,6 +407,7 @@ def main():
     # 删除不存在的条目
     remove_entries_with_output_image(apps_json,lnkandurl_files)
     image_target_paths = []
+    print("--------------------生成封面--------------------")
     # 创建并处理图像
     for idx, (target_path, is_existing) in enumerate(modified_target_paths):
         if is_existing:
@@ -419,7 +422,7 @@ def main():
     modified_target_paths = []
     for idx, (target_path, is_existing) in enumerate(modified_target_paths1):
         modified_target_paths.append((lnkandurl_files[idx], is_existing))
-
+    print("--------------------更新配置--------------------")
     # 添加新的快捷方式条目
     add_entries_to_apps_json(lnk_files, apps_json, modified_target_paths, image_target_paths)
     
@@ -432,6 +435,7 @@ def main():
         app_entry = generate_app_entry(url_file, matching_image_entry[1])
         if app_entry:  # 仅在 app_entry 不为 None 时添加
             apps_json["apps"].append(app_entry)
+            print(f"新加入: {url_file}")
 
     # 保存更新后的 apps.json 文件
     save_apps_json(apps_json, apps_json_path)
