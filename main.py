@@ -2,6 +2,7 @@ import os
 import time
 import glob
 import json
+import winreg
 import win32com.client  # 用于解析 .lnk 文件
 from icoextract import IconExtractor, IconExtractorError
 from PIL import Image, ImageDraw
@@ -105,7 +106,36 @@ def delete_output_images():
         print(f"已删除文件夹: {output_image_folder}")
 
     restart_service()  # 重启服务
-
+def get_steam_base_dir():
+    """
+    获取Steam的安装目录
+    返回: str - Steam安装路径，如果未找到则返回None
+    """
+    try:
+        # 打开Steam的注册表键
+        hkey = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam")
+        
+        # 获取SteamPath值
+        steam_path = winreg.QueryValueEx(hkey, "SteamPath")[0]
+        winreg.CloseKey(hkey)
+        
+        # 确保路径存在
+        if os.path.exists(steam_path):
+            return steam_path
+            
+    except WindowsError:
+        return None
+        
+    return None
+def generate_steamapp(app_id):
+    # 检查图片文件是否存在
+    steam_base_dir = get_steam_base_dir()
+    image_path = f"{steam_base_dir}/appcache/librarycache/{app_id}_library_600x900.jpg"
+    if not os.path.exists(image_path):
+        image_path = f"{steam_base_dir}/appcache/librarycache/{app_id}_library_600x900_schinese.jpg"
+        if not os.path.exists(image_path):
+            return None  # 如果图片文件不存在，则返回None
+    return image_path
 # 创建Tkinter窗口
 def create_gui():
     global folder_selected, close_after_completion
@@ -175,7 +205,7 @@ def create_gui():
 
     close_var = tk.BooleanVar(value=close_after_completion)  # 设置复选框的初始值
     close_checkbox = tk.Checkbutton(root, text="完成后关闭程序", variable=close_var, command=toggle_close_option)
-    close_checkbox.pack(side=tk.LEFT,pady=(0, 10))  # 上边距为0，下边距为10
+    close_checkbox.pack(side=tk.LEFT,padx=10,pady=(0, 10))  # 上边距为0，下边距为10
 
     # 在创建 GUI 时，添加伪排序选项
     pseudo_sorting_var = tk.BooleanVar(value=pseudo_sorting_enabled)  # 设置复选框的初始值
@@ -186,12 +216,128 @@ def create_gui():
         text_box.delete('1.0', tk.END)
         threading.Thread(target=main).start()
     # 开始程序按钮
-    start_button = tk.Button(root, text="--开始程序--", command=start_button_on, width=25, height=2, bg='#333333', fg='white')  # 设置背景色为黑色，文字颜色为白色
-    start_button.pack(side=tk.RIGHT, padx=3, pady=3)  # 右侧对齐
+    start_button = tk.Button(root, text="--点此开始程序--", command=start_button_on, width=25, height=2, bg='#333333', fg='white')  # 设置背景色为黑色，文字颜色为白色
+    start_button.pack(side=tk.RIGHT, padx=10, pady=3)  # 右侧对齐
 
     # 删除所有 output_image 条目的按钮
     delete_button = tk.Button(root, text="删除所有\n生成的sun应用", command=delete_output_images, width=15, height=2, bg='#aaaaaa', fg='white')  # 设置背景色为黑色，文字颜色为白色
     delete_button.pack(side=tk.RIGHT, pady=(3, 3))  # 上边距为0，下边距为10
+
+    # 在创建 GUI 时，添加转换 steam 封面按钮
+    def open_steam_cover_window():
+        """打开转换 steam 封面的新窗口"""
+        steam_cover_window = tk.Toplevel()  # 创建一个新的顶级窗口
+        steam_cover_window.title("转换 Steam 封面")
+        steam_cover_window.geometry("360x250")  # 设置窗口大小
+
+        # 在新窗口中添加内容，例如标签和按钮
+        label = tk.Label(steam_cover_window, text="选择一个已导入的steam项目，使图标封面转变为游戏海报\n（转换后视作独立应用，QSAA不进行处理，删除请前往sunshine）")
+        label.pack(pady=10)
+
+        apps_json_path = r"C:\Program Files\Sunshine\config\apps.json"  # 修改为你的 apps.json 文件路径
+        apps_json = load_apps_json(apps_json_path)  # 加载现有的 apps.json 文件
+        apps_json_save = json.loads(json.dumps(apps_json)) # 序列化和反序列化解除嵌套
+        # 只保留 detached 有效的条目
+        apps_json['apps'] = [
+            entry for entry in apps_json['apps'] 
+            if entry.get("detached")  # 确保 detached 字段存在且有效
+        ]
+
+        # 汇集所有的 detached 字段到 items
+        items = []
+        for entry in apps_json['apps']:
+            if isinstance(entry.get("detached"), list):  # 确保 detached 是一个列表
+                items.extend(entry["detached"])  # 将所有的 detached 项添加到 items 列表中
+        items = [item.strip('"') for item in items]
+        # 检查每个文件是否包含 steam://rungameid/ 字段
+        valid_items = []
+        steam_urls = []  # 用于存储有效的 steam URL
+        for item in items:
+            try:
+                # 检查文件扩展名
+                if item.lower().endswith('.url'):
+                    # 读取 .url 文件
+                    with open(item, 'r', encoding='utf-8') as f:
+                        content = f.readlines()
+                        for line in content:
+                            if line.startswith("URL="):  # 检查是否以 URL= 开头
+                                url = line.split("=", 1)[1].strip()  # 获取 URL
+                                if "steam://rungameid/" in url:  # 检查是否包含该字段
+                                    valid_items.append(item)  # 如果包含，则保留该项
+                                    steam_urls.append(re.findall(r'\d+', url))  # 存储有效的steamid
+                                    break  # 找到后可以跳出循环
+                else:
+                    # 只读打开其他文件
+                    with open(item, 'r', encoding='utf-8') as f:
+                        content = f.read()  # 读取文件内容
+                        if "steam://rungameid/" in content:  # 检查是否包含该字段
+                            valid_items.append(item)  # 如果包含，则保留该项
+            except Exception as e:
+                print(f"无法读取文件 {item}: {e}")  # 处理文件读取异常
+
+        items = valid_items  # 更新 items 列表为有效项
+
+        # 创建 display_items 变量，将 items 中的项目转变为无后缀文件名形式
+        display_items = [os.path.splitext(os.path.basename(item))[0] for item in items]  # 去掉文件后缀
+        non_items = []
+        for app in apps_json['apps']:
+            # 如果'app'中包含'key'为'image-path'，并且该路径包含'_library_600x900'子字符串
+            if 'image-path' in app and '_library_600x900' in app['image-path']:
+                non_items.append(os.path.splitext(os.path.basename(app['detached'][0]))[0])
+        for i in range(len(display_items)):
+            # 判断当前项是否在 non_items 中
+            if display_items[i] in non_items:
+                # 如果存在，修改 display_items 中的该项
+                display_items[i] += " -- 已转换过"
+        # 创建 Listbox 组件
+        listbox = tk.Listbox(steam_cover_window, height=4) 
+        listbox.pack(pady=0, padx=15, fill=tk.BOTH, expand=True)
+
+        # 将 display_items 中的内容添加到 Listbox
+        for item in display_items:
+            listbox.insert(tk.END, item)
+
+        # 定义选择事件处理函数
+        def on_select():
+            selected_indices = listbox.curselection()  # 获取选中的索引
+            if selected_indices:
+                if " -- 已转换过" in display_items[selected_indices[0]]:
+                    print("这个已经转换过了")
+                    return  # 如果包含，直接返回
+                selected_items = items[selected_indices[0]]  # 获取选中的项
+                print(f"尝试转换: {selected_items} id：{int(steam_urls[selected_indices[0]][0])}") 
+                steamimage = generate_steamapp(int(steam_urls[selected_indices[0]][0]))
+                print(steamimage)
+                for app in apps_json_save['apps']:
+                    # 如果 'detached' 是一个列表，并且它有至少一个元素
+                    if 'detached' in app and len(app['detached']) > 0 and app['detached'][0].strip('"') == selected_items:
+                        app['image-path'] = steamimage
+                        print("替换成功")
+                        break
+                save_apps_json(apps_json_save, apps_json_path)
+                restart_service()
+                steam_cover_window.destroy()
+            else:
+                print("请选中一项再转换")
+
+
+        # 创建一个框架用于放置按钮
+        fold_frame = tk.Frame(steam_cover_window)
+        fold_frame.pack(padx=10, pady=(10, 0))
+
+        # 创建两个按钮并放置在同一行
+        c_button = tk.Button(fold_frame, text="--转换--", width=25, bg='#aaaaaa', command=on_select)
+        c_button.pack(side=tk.LEFT, padx=5)  # 使用 side=tk.LEFT 使按钮在同一行
+
+        close_button = tk.Button(fold_frame, text="关闭转换窗口", width=20, bg='#aaaaaa', command=steam_cover_window.destroy)
+        close_button.pack(side=tk.LEFT)  # 使用 side=tk.LEFT 使按钮在同一行
+
+        # 添加开源地址标签
+        label = tk.Label(steam_cover_window, text="开源地址：https://github.com/gmaox/QuickStreamAppAdd")
+        label.pack(pady=5)  # 确保调用 pack() 方法将标签添加到窗口中
+
+    steam_cover_button = tk.Button(root, text="转换已生成\nsteam快捷方式封面", command=open_steam_cover_window, width=15, height=2, bg='#aaaaaa', fg='white')  # 设置背景色为黑色，文字颜色为白色
+    steam_cover_button.pack(side=tk.RIGHT, padx=5, pady=(3, 3))  # 上边距为0，下边距为10
 
     # 在GUI启动时重定向print
     sys.stdout = RedirectPrint(text_box)
