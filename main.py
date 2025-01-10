@@ -14,16 +14,22 @@ import sys
 import threading  # 导入 threading 模块
 import configparser  # 导入 configparser 模块
 import shutil  # 导入 shutil 模块
+import re  # 导入正则表达式模块
 
 # 在文件开头添加全局变量
 
 config = configparser.ConfigParser()
-config_file_path = 'config.ini'  # 配置文件路径
+if getattr(sys, 'frozen', False):
+    # 如果是打包后的应用程序
+    config_file_path = os.path.join(os.path.dirname(sys.executable), 'config.ini')  # 存储在可执行文件同级目录
+else:
+    # 如果是开发环境
+    config_file_path = 'config.ini'
 onestart = True
 skipped_entries = []
-#folder_selected = os.path.join(os.path.expanduser("~"), "Desktop")
-folder_selected = ""
+folder_selected = os.path.join(os.path.expanduser("~"), "Desktop")
 close_after_completion = True  # 默认开启
+pseudo_sorting_enabled = False  # 新增伪排序适应选项，默认关闭
 
 # 重定向print函数，使输出显示在tkinter的文本框中
 class RedirectPrint:
@@ -36,24 +42,49 @@ class RedirectPrint:
     def flush(self):
         pass
 
+def load_apps_json(json_path):
+    # 加载已有的 apps.json
+    if os.path.exists(json_path):
+        with open(json_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    else:
+        # 如果文件不存在，返回一个空的基础结构
+        return {"env": "", "apps": []}
+    
+def save_apps_json(apps_json, file_path):
+    # 将更新后的 apps.json 保存到文件
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(apps_json, f, ensure_ascii=False, indent=4)
+
 def load_config():
     """加载配置文件"""
     if os.path.exists(config_file_path):
         config.read(config_file_path)
         folder = config.get('Settings', 'folder_selected', fallback='')
-        global close_after_completion
+        global close_after_completion, pseudo_sorting_enabled
         close_after_completion = config.getboolean('Settings', 'close_after_completion', fallback=True)  # 获取关闭选项
+        pseudo_sorting_enabled = config.getboolean('Settings', 'pseudo_sorting_enabled', fallback=False)  # 获取伪排序选项
+        
+        # 检查 folder 是否有效
+        if not os.path.isdir(folder):
+            print(f"无效的目录: {folder}，将使用默认目录。")
+            folder = os.path.join(os.path.expanduser("~"), "Desktop")  # 设置为默认桌面目录
+            
         return folder
-    return ''
+    return os.path.join(os.path.expanduser("~"), "Desktop")  # 如果配置文件不存在，返回默认桌面目录
 
 def save_config(folder):
     """保存选择的目录到配置文件"""
-    config['Settings'] = {
-        'folder_selected': folder,
-        'close_after_completion': close_after_completion  # 保存关闭选项
-    }
-    with open(config_file_path, 'w') as configfile:
-        config.write(configfile)
+    try:
+        config['Settings'] = {
+            'folder_selected': folder,
+            'close_after_completion': close_after_completion,
+            'pseudo_sorting_enabled': pseudo_sorting_enabled
+        }
+        with open(config_file_path, 'w') as configfile:
+            config.write(configfile)
+    except Exception as e:
+        print(f"保存配置文件时出错: {e}")
 
 def delete_output_images():
     """删除 apps.json 中包含 "output_image" 的条目并重启服务"""
@@ -79,6 +110,9 @@ def delete_output_images():
 def create_gui():
     global folder_selected, close_after_completion
     folder_selected = load_config()  # 加载配置文件中的目录
+    # 确保 folder_selected 是有效的目录
+    if not os.path.isdir(folder_selected):
+        folder_selected = os.path.join(os.path.expanduser("~"), "Desktop")  # 设置为默认桌面目录
     root = tk.Tk()
     root.title("QuickStreamAppAdd")
     root.geometry("700x400")
@@ -120,10 +154,34 @@ def create_gui():
         global close_after_completion
         close_after_completion = close_var.get()
         save_config(folder_selected)  # 保存选项状态
+    def pseudo_sorting_option():
+        global pseudo_sorting_enabled
+        pseudo_sorting_enabled = pseudo_sorting_var.get()  # 获取伪排序选项状态
+        apps_json_path = r"C:\Program Files\Sunshine\config\apps.json"  # 修改为你的 apps.json 文件路径
+        apps_json = load_apps_json(apps_json_path)  # 加载现有的 apps.json 文件
+        if not pseudo_sorting_enabled:
+            for idx, entry in enumerate(apps_json["apps"]):
+                entry["name"] = re.sub(r'^\d{2} ', '', entry["name"])
+            save_apps_json(apps_json, apps_json_path)
+            print("已清除伪排序标志")
+        else:
+            for idx, entry in enumerate(apps_json["apps"]):
+                entry["name"] = re.sub(r'^\d{2} ', '', entry["name"])
+                entry["name"] = f"{idx:02d} {entry['name']}"  # 在名称前加上排序数字，格式化为两位数
+            save_apps_json(apps_json, apps_json_path)
+            print("已添加伪排序标志")
+        save_config(folder_selected)  # 保存选项状态
+
 
     close_var = tk.BooleanVar(value=close_after_completion)  # 设置复选框的初始值
     close_checkbox = tk.Checkbutton(root, text="完成后关闭程序", variable=close_var, command=toggle_close_option)
     close_checkbox.pack(side=tk.LEFT,pady=(0, 10))  # 上边距为0，下边距为10
+
+    # 在创建 GUI 时，添加伪排序选项
+    pseudo_sorting_var = tk.BooleanVar(value=pseudo_sorting_enabled)  # 设置复选框的初始值
+    pseudo_sorting_checkbox = tk.Checkbutton(root, text="启用伪排序", variable=pseudo_sorting_var, command=pseudo_sorting_option)
+    pseudo_sorting_checkbox.pack(side=tk.LEFT, pady=(0, 10))  # 上边距为0，下边距为10
+
     def start_button_on():
         text_box.delete('1.0', tk.END)
         threading.Thread(target=main).start()
@@ -240,14 +298,6 @@ def create_image_with_icon(exe_path, output_path ,idx):
         print(f"创建图像时发生异常，跳过此文件: {exe_path}\n异常信息: {e}")
         skipped_entries.append(idx)  # 记录异常条目
 
-def load_apps_json(json_path):
-    # 加载已有的 apps.json
-    if os.path.exists(json_path):
-        with open(json_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    else:
-        # 如果文件不存在，返回一个空的基础结构
-        return {"env": "", "apps": []}
 
 def generate_app_entry(lnk_file, index):
     # 跳过已记录的异常条目
@@ -312,10 +362,6 @@ def remove_entries_with_output_image(apps_json, base_names):
     ]
     print("已删除不符合条件的条目")
 
-def save_apps_json(apps_json, file_path):
-    # 将更新后的 apps.json 保存到文件
-    with open(file_path, 'w', encoding='utf-8') as f:
-        json.dump(apps_json, f, ensure_ascii=False, indent=4)
 
 def get_url_files():
     # 获取当前工作目录下的所有 .url 文件
@@ -367,7 +413,7 @@ def find_unused_index(apps_json, image_target_paths):
     return index
 
 def main():
-    global folder_selected, onestart, close_after_completion
+    global folder_selected, onestart, close_after_completion, pseudo_sorting_enabled
     # 获取当前目录下所有有效的 .lnk 和 .url 文件
     os.chdir(folder_selected)  # 设置为用户选择的目录
     lnk_files = get_lnk_files()
@@ -384,7 +430,7 @@ def main():
     apps_json_path = r"C:\Program Files\Sunshine\config\apps.json"  # 修改为你的 apps.json 文件路径
     print(f"该应用会创建《{output_folder}》文件夹来存放输出的图像\n修改以下文件《{apps_json_path}》来添加sunshine应用程序")
     if onestart:
-        onestart=False
+        onestart = False
         return
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
@@ -404,8 +450,9 @@ def main():
             modified_target_paths.append((target_path, True))  # 添加特殊标识符
         else:
             modified_target_paths.append((target_path, False))  # 不存在则标记为 False
+
     # 删除不存在的条目
-    remove_entries_with_output_image(apps_json,lnkandurl_files)
+    remove_entries_with_output_image(apps_json, lnkandurl_files)
     image_target_paths = []
     print("--------------------生成封面--------------------")
     # 创建并处理图像
@@ -417,15 +464,17 @@ def main():
         image_target_paths.append((lnkandurl_files[idx], output_index))
         output_path = os.path.join(output_folder, f"output_image{output_index}.png")
         create_image_with_icon(target_path, output_path, idx)
-    #转换modified_target_paths
+
+    # 转换 modified_target_paths
     modified_target_paths1 = modified_target_paths
     modified_target_paths = []
     for idx, (target_path, is_existing) in enumerate(modified_target_paths1):
         modified_target_paths.append((lnkandurl_files[idx], is_existing))
+    
     print("--------------------更新配置--------------------")
     # 添加新的快捷方式条目
     add_entries_to_apps_json(lnk_files, apps_json, modified_target_paths, image_target_paths)
-    
+
     # 处理 .url 文件的条目
     for index, (url_file, target_path) in enumerate(url_files, start=len(lnk_files)):
         if any(target_path == url_file and is_existing for target_path, is_existing in modified_target_paths):
@@ -436,6 +485,14 @@ def main():
         if app_entry:  # 仅在 app_entry 不为 None 时添加
             apps_json["apps"].append(app_entry)
             print(f"新加入: {url_file}")
+
+    # 如果启用了伪排序，更新条目的名称
+    if pseudo_sorting_enabled:
+        for idx, entry in enumerate(apps_json["apps"]):
+            # 去掉之前的序号
+            entry["name"] = re.sub(r'^\d{2} ', '', entry["name"])  # 去掉开头的两位数字和空格
+            entry["name"] = f"{idx:02d} {entry['name']}"  # 在名称前加上排序数字，格式化为两位数
+        print("已添加伪排序标志")
 
     # 保存更新后的 apps.json 文件
     save_apps_json(apps_json, apps_json_path)
