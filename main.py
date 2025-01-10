@@ -319,7 +319,6 @@ def create_gui():
             else:
                 print("请选中一项再转换")
 
-
         # 创建一个框架用于放置按钮
         fold_frame = tk.Frame(steam_cover_window)
         fold_frame.pack(padx=10, pady=(10, 0))
