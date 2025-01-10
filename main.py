@@ -315,7 +315,6 @@ def create_gui():
                         print("替换成功")
                         break
                 save_apps_json(apps_json_save, apps_json_path)
-                restart_service()
                 steam_cover_window.destroy()
             else:
                 print("请选中一项再转换")
