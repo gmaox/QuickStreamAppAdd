@@ -16,7 +16,7 @@ import threading  # 导入 threading 模块
 import configparser  # 导入 configparser 模块
 import shutil  # 导入 shutil 模块
 import re  # 导入正则表达式模块
-
+import pythoncom
 # 在文件开头添加全局变量
 
 config = configparser.ConfigParser()
@@ -28,7 +28,7 @@ else:
     config_file_path = 'config.ini'
 onestart = True
 skipped_entries = []
-folder_selected = os.path.join(os.path.expanduser("~"), "Desktop")
+folder_selected = os.path.realpath(os.path.join(os.path.expanduser("~"), "Desktop")).replace("\\", "/")
 close_after_completion = True  # 默认开启
 pseudo_sorting_enabled = False  # 新增伪排序适应选项，默认关闭
 
@@ -69,10 +69,10 @@ def load_config():
         # 检查 folder 是否有效
         if not os.path.isdir(folder):
             print(f"无效的目录: {folder}，将使用默认目录。")
-            folder = os.path.join(os.path.expanduser("~"), "Desktop")  # 设置为默认桌面目录
+            folder = os.path.realpath(os.path.join(os.path.expanduser("~"), "Desktop")).replace("\\", "/")  # 设置为默认桌面目录
             
         return folder
-    return os.path.join(os.path.expanduser("~"), "Desktop")  # 如果配置文件不存在，返回默认桌面目录
+    return os.path.realpath(os.path.join(os.path.expanduser("~"), "Desktop")).replace("\\", "/")  # 如果配置文件不存在，返回默认桌面目录
 
 def save_config(folder):
     """保存选择的目录到配置文件"""
@@ -142,7 +142,7 @@ def create_gui():
     folder_selected = load_config()  # 加载配置文件中的目录
     # 确保 folder_selected 是有效的目录
     if not os.path.isdir(folder_selected):
-        folder_selected = os.path.join(os.path.expanduser("~"), "Desktop")  # 设置为默认桌面目录
+        folder_selected = os.path.realpath(os.path.join(os.path.expanduser("~"), "Desktop")).replace("\\", "/")  # 设置为默认桌面目录
     root = tk.Tk()
     root.title("QuickStreamAppAdd")
     root.geometry("700x400")
@@ -365,6 +365,7 @@ def get_lnk_files():
     return valid_lnk_files
 
 def get_target_path_from_lnk(lnk_file):
+    pythoncom.CoInitialize()
     # 使用 win32com 获取快捷方式目标路径
     shell = win32com.client.Dispatch("WScript.Shell")
     shortcut = shell.CreateShortCut(lnk_file)
