@@ -37,6 +37,7 @@ class RedirectPrint:
     def __init__(self, text_widget):
         self.text_widget = text_widget
         self.original_stdout = sys.stdout
+        self.original_stderr = sys.stderr
     def write(self, message):
         self.text_widget.insert(tk.END, message)
         self.text_widget.yview(tk.END)  # 滚动到文本框底部
@@ -337,8 +338,10 @@ def create_gui():
     steam_cover_button = tk.Button(root, text="转换已生成\nsteam快捷方式封面", command=open_steam_cover_window, width=15, height=2, bg='#aaaaaa', fg='white')  # 设置背景色为黑色，文字颜色为白色
     steam_cover_button.pack(side=tk.RIGHT, padx=5, pady=(3, 3))  # 上边距为0，下边距为10
 
-    # 在GUI启动时重定向print
-    sys.stdout = RedirectPrint(text_box)
+    # 重定向 stdout 和 stderr 到文本框
+    redirector = RedirectPrint(text_box)
+    sys.stdout = redirector  # 重定向标准输出
+    sys.stderr = redirector  # 重定向错误输出
     main()
     root.mainloop()
 
