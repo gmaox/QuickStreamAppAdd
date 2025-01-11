@@ -583,7 +583,7 @@ def main():
     apps_json = load_apps_json(apps_json_path)
 
     # 检查 target_paths 是否与 apps.json 中的条目名称相同
-    existing_names1 = {os.path.splitext(os.path.basename(entry['cmd']))[0] for entry in apps_json['apps']}  # 处理 cmd 字段
+    existing_names1 = {os.path.splitext(os.path.basename(entry.get('cmd', '')))[0] for entry in apps_json['apps']}  # 处理 cmd 字段
     existing_names2 = {os.path.splitext(os.path.basename(detached_item))[0] for entry in apps_json['apps'] if 'detached' in entry for detached_item in entry['detached']}  # 处理 detached 字段
     modified_target_paths = []  # 确保在这里初始化
 
