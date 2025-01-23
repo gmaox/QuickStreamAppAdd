@@ -181,6 +181,14 @@ def create_gui():
     folder_button = tk.Button(folder_frame, text="选择文件夹", command=select_directory)
     folder_button.pack(padx=(10, 0), side=tk.LEFT)  # 上边距为0，左对齐
 
+    def open_sun_apps():
+        import webbrowser
+        webbrowser.open('https://localhost:47990/apps')
+
+    # 打开sunapp管理按钮
+    apps_button = tk.Button(folder_frame, text="应用管理",bg='#FFA500',command=open_sun_apps)
+    apps_button.pack(padx=(10, 0), side=tk.LEFT)  # 上边距为0，左对齐
+
     # 创建文本框用来显示程序输出
     text_box = tk.Text(root, wrap=tk.WORD, height=15, bg='#333333', fg='white')
     text_box.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
@@ -352,7 +360,7 @@ def create_gui():
         excluded_window = tk.Toplevel()
         excluded_window.title("编辑排除的快捷方式项目")
         excluded_window.geometry("360x250")
-
+        print("--------------------------分隔线---------------------------")
         # 在新窗口中添加内容，例如标签和按钮
         label = tk.Label(excluded_window, text="选择一个列表中的项目，选中隐藏后的项目将不会添加\n（可多选，可以把办公软件和系统软件隐藏）")
         label.pack(pady=10)
@@ -361,15 +369,28 @@ def create_gui():
         listbox = tk.Listbox(excluded_window, height=4, selectmode=tk.MULTIPLE)
         listbox.pack(pady=0, padx=15, fill=tk.BOTH, expand=True)
 
-        # 获取lnkandurl_files内容
+        # 获取包含已隐藏文件的完整列表
         os.chdir(folder_selected)
-        lnk_files = get_lnk_files()
-        url_files = get_url_files()
-        lnkandurl_files = lnk_files + [url[0] for url in url_files]
+        current_lnk = get_lnk_files(include_hidden=True)  # 包含已隐藏
+        current_url = get_url_files(include_hidden=True)  # 包含已隐藏（正确调用方式）
+        current_files = current_lnk + [url[0] for url in current_url]
+        print("--------------------------分隔线---------------------------")
 
-        # 将内容添加到Listbox
-        for file in lnkandurl_files:
-            listbox.insert(tk.END, file)
+        # 将内容添加到Listbox并添加已隐藏标记
+        for file in current_files:
+            # 统一格式化显示名称（使用固定宽度字体对齐）
+            max_name_len = 34
+            status_suffix = " --已隐藏" if file in hidden_files else ""
+            
+            # 移除路径只显示文件名
+            display_name = os.path.basename(file)
+            
+            if len(display_name) > max_name_len:
+                trimmed = display_name[:max_name_len-3] + '...'
+            else:
+                trimmed = display_name.ljust(max_name_len)
+            
+            listbox.insert(tk.END, f"{trimmed}{status_suffix}")
 
         # 创建一个框架用于放置按钮
         fold_frame = tk.Frame(excluded_window)
@@ -378,15 +399,39 @@ def create_gui():
         # 创建两个按钮并放置在同一行
         def toggle_hidden():
             selected_indices = listbox.curselection()
+            
+            # 获取包含隐藏文件的完整列表
+            current_lnk = get_lnk_files(include_hidden=True)
+            current_url = [url[0] for url in get_url_files(include_hidden=True)]
+            current_files = current_lnk + current_url
+            
+            # 更新选中项状态
             for idx in selected_indices:
-                item = listbox.get(idx)
-                if item in hidden_files:
-                    hidden_files.remove(item)
-                    print(f"已显示: {item}")
+                original_item = current_files[idx]  # 从最新文件列表获取
+                if original_item in hidden_files:
+                    hidden_files.remove(original_item)
+                    print(f"已显示: {original_item}")
                 else:
-                    hidden_files.append(item)
-                    print(f"已隐藏: {item}")
+                    hidden_files.append(original_item)
+                    print(f"已隐藏: {original_item}")
             save_config()
+            
+            # 完全刷新Listbox
+            listbox.delete(0, tk.END)
+            for file in current_files:
+                # 统一格式化显示名称（使用固定宽度字体对齐）
+                max_name_len = 34
+                status_suffix = " --已隐藏" if file in hidden_files else ""
+                
+                # 移除路径只显示文件名
+                display_name = os.path.basename(file)
+                
+                if len(display_name) > max_name_len:
+                    trimmed = display_name[:max_name_len-3] + '...'
+                else:
+                    trimmed = display_name.ljust(max_name_len)
+                
+                listbox.insert(tk.END, f"{trimmed}{status_suffix}")
 
         c_button = tk.Button(fold_frame, text="--显示/隐藏--", width=25, bg='#aaaaaa', command=toggle_hidden)
         c_button.pack(side=tk.LEFT, padx=5)  # 使用 side=tk.LEFT 使按钮在同一行
@@ -439,18 +484,19 @@ def create_gui():
     main()
     root.mainloop()
 
-def get_lnk_files():
-    #global hidden_files
-    #print(hidden_files)
+def get_lnk_files(include_hidden=False):
     # 获取当前工作目录下的所有 .lnk 文件
     lnk_files = glob.glob("*.lnk")
     valid_lnk_files = []
     
-    # 过滤掉指向文件夹的快捷方式
+    # 过滤掉指向文件夹的快捷方式和已隐藏文件
     for lnk in lnk_files:
         try:
+            # 检查是否在隐藏列表中（当不需要包含隐藏文件时）
+            if not include_hidden and lnk in hidden_files:
+                continue
+                
             target_path = get_target_path_from_lnk(lnk)
-            # 只保留指向可执行文件的快捷方式
             if os.path.isdir(target_path):
                 print(f"跳过文件夹快捷方式: {lnk} -> {target_path}")
             else:
@@ -458,7 +504,11 @@ def get_lnk_files():
         except Exception as e:
             print(f"无法获取 {lnk} 的目标路径: {e}")
     
-    print("找到的 .lnk 文件:")
+    if include_hidden:
+        print("找到所有.lnk文件（包含已隐藏）:")
+    else:
+        print("找到的可见.lnk文件:")
+        
     for idx, lnk in enumerate(valid_lnk_files):
         print(f"{idx+1}. {lnk}")
     return valid_lnk_files
@@ -607,13 +657,17 @@ def remove_entries_with_output_image(apps_json, base_names):
     print("已删除不符合条件的条目")
 
 
-def get_url_files():
+def get_url_files(include_hidden=False):
     # 获取当前工作目录下的所有 .url 文件
     url_files = glob.glob("*.url")
     valid_url_files = []
     
     for url in url_files:
         try:
+            # 检查是否在隐藏列表中（当不需要包含隐藏文件时）
+            if not include_hidden and url in hidden_files:
+                continue
+                
             target_path = get_url_target_path(url)
             valid_url_files.append((url, target_path))
         except Exception as e:
