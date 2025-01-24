@@ -18,7 +18,7 @@ import shutil  # 导入 shutil 模块
 import re  # 导入正则表达式模块
 import pythoncom
 # 在文件开头添加全局变量
-
+hidden_files = []
 config = configparser.ConfigParser()
 if getattr(sys, 'frozen', False):
     # 如果是打包后的应用程序
@@ -28,7 +28,7 @@ else:
     config_file_path = 'config.ini'
 onestart = True
 skipped_entries = []
-folder_selected = os.path.realpath(os.path.join(os.path.expanduser("~"), "Desktop")).replace("\\", "/")
+folder_selected = ''
 close_after_completion = True  # 默认开启
 pseudo_sorting_enabled = False  # 新增伪排序适应选项，默认关闭
 
@@ -60,28 +60,32 @@ def save_apps_json(apps_json, file_path):
 
 def load_config():
     """加载配置文件"""
-    if os.path.exists(config_file_path):
-        config.read(config_file_path)
-        folder = config.get('Settings', 'folder_selected', fallback='')
-        global close_after_completion, pseudo_sorting_enabled
-        close_after_completion = config.getboolean('Settings', 'close_after_completion', fallback=True)  # 获取关闭选项
-        pseudo_sorting_enabled = config.getboolean('Settings', 'pseudo_sorting_enabled', fallback=False)  # 获取伪排序选项
-        
-        # 检查 folder 是否有效
-        if not os.path.isdir(folder):
-            print(f"无效的目录: {folder}，将使用默认目录。")
-            folder = os.path.realpath(os.path.join(os.path.expanduser("~"), "Desktop")).replace("\\", "/")  # 设置为默认桌面目录
-            
-        return folder
-    return os.path.realpath(os.path.join(os.path.expanduser("~"), "Desktop")).replace("\\", "/")  # 如果配置文件不存在，返回默认桌面目录
+    global close_after_completion, pseudo_sorting_enabled, hidden_files ,folder
+    config.read(config_file_path)
+    folder = config.get('Settings', 'folder_selected', fallback='')
+    hidden_files_str = config.get('Settings', 'hidden_files', fallback='')  # 获取隐藏的文件路径字符串
+    hidden_files = hidden_files_str.split(',') if hidden_files_str else []  # 将字符串转换为列表
+    close_after_completion = config.getboolean('Settings', 'close_after_completion', fallback=True)  # 获取关闭选项
+    pseudo_sorting_enabled = config.getboolean('Settings', 'pseudo_sorting_enabled', fallback=False)  # 获取伪排序选项
+    if os.path.exists(config_file_path)==False:
+        save_config()  #没有配置文件保存下
+    # 检查 folder 是否有效
+    if not os.path.isdir(folder):
+        print(f"无效的目录: {folder}，将使用默认目录。")
+        folder = os.path.realpath(os.path.join(os.path.expanduser("~"), "Desktop")).replace("\\", "/")  # 设置为默认桌面目录
+        save_config()
+    return folder
 
-def save_config(folder):
+def save_config():
     """保存选择的目录到配置文件"""
     try:
+        global hidden_files, folder, close_after_completion, pseudo_sorting_enabled  # 添加全局变量声明
         config['Settings'] = {
             'folder_selected': folder,
             'close_after_completion': close_after_completion,
-            'pseudo_sorting_enabled': pseudo_sorting_enabled
+            'pseudo_sorting_enabled': pseudo_sorting_enabled,
+            # 将 hidden_files 列表转换为逗号分隔的字符串
+            'hidden_files': ','.join(hidden_files) if hidden_files else ''
         }
         with open(config_file_path, 'w') as configfile:
             config.write(configfile)
@@ -139,7 +143,7 @@ def generate_steamapp(app_id):
     return image_path
 # 创建Tkinter窗口
 def create_gui():
-    global folder_selected, close_after_completion
+    global folder_selected, close_after_completion, hidden_files
     folder_selected = load_config()  # 加载配置文件中的目录
     # 确保 folder_selected 是有效的目录
     if not os.path.isdir(folder_selected):
@@ -159,7 +163,7 @@ def create_gui():
     folder_entry.config(state=tk.DISABLED)
 
     def select_directory():
-        global folder_selected, onestart
+        global folder_selected, onestart , folder
         folder_selected = filedialog.askdirectory()
         if folder_selected:
             print(f"选择的目录: {folder_selected}")
@@ -167,7 +171,8 @@ def create_gui():
             folder_entry.config(state=tk.NORMAL)  # 允许编辑
             folder_entry.delete(0, tk.END)  # 清空文本框
             folder_entry.insert(0, folder_selected)  # 显示选择的文件夹路径
-            save_config(folder_selected)  # 保存选择的目录
+            folder = folder_selected
+            save_config()  # 保存选择的目录
             onestart = True
             main()
             folder_entry.config(state=tk.DISABLED)  # 选择后再设置为不可编辑
@@ -175,6 +180,14 @@ def create_gui():
     # 文件夹选择按钮
     folder_button = tk.Button(folder_frame, text="选择文件夹", command=select_directory)
     folder_button.pack(padx=(10, 0), side=tk.LEFT)  # 上边距为0，左对齐
+
+    def open_sun_apps():
+        import webbrowser
+        webbrowser.open('https://localhost:47990/apps')
+
+    # 打开sunapp管理按钮
+    apps_button = tk.Button(folder_frame, text="应用管理",bg='#FFA500',command=open_sun_apps)
+    apps_button.pack(padx=(10, 0), side=tk.LEFT)  # 上边距为0，左对齐
 
     # 创建文本框用来显示程序输出
     text_box = tk.Text(root, wrap=tk.WORD, height=15, bg='#333333', fg='white')
@@ -184,7 +197,7 @@ def create_gui():
     def toggle_close_option():
         global close_after_completion
         close_after_completion = close_var.get()
-        save_config(folder_selected)  # 保存选项状态
+        save_config()  # 保存选项状态
     def pseudo_sorting_option():
         global pseudo_sorting_enabled
         pseudo_sorting_enabled = pseudo_sorting_var.get()  # 获取伪排序选项状态
@@ -201,28 +214,31 @@ def create_gui():
                 entry["name"] = f"{idx:02d} {entry['name']}"  # 在名称前加上排序数字，格式化为两位数
             save_apps_json(apps_json, apps_json_path)
             print("已添加伪排序标志")
-        save_config(folder_selected)  # 保存选项状态
+        save_config()  # 保存选项状态
 
+    # 创建一个框架来包含复选框
+    checkbox_frame = tk.Frame(root)
+    checkbox_frame.pack(side=tk.LEFT, padx=(10,0), pady=(0, 0))
 
-    close_var = tk.BooleanVar(value=close_after_completion)  # 设置复选框的初始值
-    close_checkbox = tk.Checkbutton(root, text="完成后关闭程序", variable=close_var, command=toggle_close_option)
-    close_checkbox.pack(side=tk.LEFT,padx=10,pady=(0, 10))  # 上边距为0，下边距为10
+    close_var = tk.BooleanVar(value=close_after_completion) # 设置复选框的初始值
+    close_checkbox = tk.Checkbutton(checkbox_frame, text="完成后关闭程序", variable=close_var, command=toggle_close_option)
+    close_checkbox.pack(side=tk.TOP, pady=(0, 0)) # 上边距为0
 
     # 在创建 GUI 时，添加伪排序选项
-    pseudo_sorting_var = tk.BooleanVar(value=pseudo_sorting_enabled)  # 设置复选框的初始值
-    pseudo_sorting_checkbox = tk.Checkbutton(root, text="启用伪排序", variable=pseudo_sorting_var, command=pseudo_sorting_option)
-    pseudo_sorting_checkbox.pack(side=tk.LEFT, pady=(0, 10))  # 上边距为0，下边距为10
-
+    pseudo_sorting_var = tk.BooleanVar(value=pseudo_sorting_enabled) # 设置复选框的初始值
+    pseudo_sorting_checkbox = tk.Checkbutton(checkbox_frame, text="启用伪排序      ", variable=pseudo_sorting_var, command=pseudo_sorting_option)
+    pseudo_sorting_checkbox.pack(side=tk.TOP, pady=(0, 0)) # 上边距为0
+    
     def start_button_on():
         text_box.delete('1.0', tk.END)
         threading.Thread(target=main).start()
     # 开始程序按钮
     start_button = tk.Button(root, text="--点此开始程序--", command=start_button_on, width=25, height=2, bg='#333333', fg='white')  # 设置背景色为黑色，文字颜色为白色
-    start_button.pack(side=tk.RIGHT, padx=10, pady=3)  # 右侧对齐
+    start_button.pack(side=tk.RIGHT, padx=(0,10), pady=3)  # 右侧对齐
 
     # 删除所有 output_image 条目的按钮
     delete_button = tk.Button(root, text="删除所有\n生成的sun应用", command=delete_output_images, width=15, height=2, bg='#aaaaaa', fg='white')  # 设置背景色为黑色，文字颜色为白色
-    delete_button.pack(side=tk.RIGHT, pady=(3, 3))  # 上边距为0，下边距为10
+    delete_button.pack(side=tk.RIGHT, padx=0, pady=(3, 3))  # 上边距为0，下边距为10
 
     # 在创建 GUI 时，添加转换 steam 封面按钮
     def open_steam_cover_window():
@@ -336,7 +352,130 @@ def create_gui():
         label.pack(pady=5)  # 确保调用 pack() 方法将标签添加到窗口中
 
     steam_cover_button = tk.Button(root, text="转换已生成\nsteam快捷方式封面", command=open_steam_cover_window, width=15, height=2, bg='#aaaaaa', fg='white')  # 设置背景色为黑色，文字颜色为白色
-    steam_cover_button.pack(side=tk.RIGHT, padx=5, pady=(3, 3))  # 上边距为0，下边距为10
+    steam_cover_button.pack(side=tk.RIGHT, padx=0, pady=(3, 3))  # 上边距为0，下边距为10
+
+    # 添加两个新按钮
+    def edit_excluded_shortcuts_window():
+        """打开编辑排除快捷方式的新窗口"""
+        excluded_window = tk.Toplevel()
+        excluded_window.title("编辑排除的快捷方式项目")
+        excluded_window.geometry("360x250")
+        print("--------------------------分隔线---------------------------")
+        # 在新窗口中添加内容，例如标签和按钮
+        label = tk.Label(excluded_window, text="选择一个列表中的项目，选中隐藏后的项目将不会添加\n（可多选，可以把办公软件和系统软件隐藏）")
+        label.pack(pady=10)
+
+        # 创建支持多选的Listbox
+        listbox = tk.Listbox(excluded_window, height=4, selectmode=tk.MULTIPLE)
+        listbox.pack(pady=0, padx=15, fill=tk.BOTH, expand=True)
+
+        # 获取包含已隐藏文件的完整列表
+        os.chdir(folder_selected)
+        current_lnk = get_lnk_files(include_hidden=True)  # 包含已隐藏
+        current_url = get_url_files(include_hidden=True)  # 包含已隐藏（正确调用方式）
+        current_files = current_lnk + [url[0] for url in current_url]
+        print("--------------------------分隔线---------------------------")
+
+        # 将内容添加到Listbox并添加已隐藏标记
+        for file in current_files:
+            # 统一格式化显示名称（使用固定宽度字体对齐）
+            max_name_len = 34
+            status_suffix = " --已隐藏" if file in hidden_files else ""
+            
+            # 移除路径只显示文件名
+            display_name = os.path.basename(file)
+            
+            if len(display_name) > max_name_len:
+                trimmed = display_name[:max_name_len-3] + '...'
+            else:
+                trimmed = display_name.ljust(max_name_len)
+            
+            listbox.insert(tk.END, f"{trimmed}{status_suffix}")
+
+        # 创建一个框架用于放置按钮
+        fold_frame = tk.Frame(excluded_window)
+        fold_frame.pack(padx=10, pady=(10, 0))
+
+        # 创建两个按钮并放置在同一行
+        def toggle_hidden():
+            selected_indices = listbox.curselection()
+            
+            # 获取包含隐藏文件的完整列表
+            current_lnk = get_lnk_files(include_hidden=True)
+            current_url = [url[0] for url in get_url_files(include_hidden=True)]
+            current_files = current_lnk + current_url
+            
+            # 更新选中项状态
+            for idx in selected_indices:
+                original_item = current_files[idx]  # 从最新文件列表获取
+                if original_item in hidden_files:
+                    hidden_files.remove(original_item)
+                    print(f"已显示: {original_item}")
+                else:
+                    hidden_files.append(original_item)
+                    print(f"已隐藏: {original_item}")
+            save_config()
+            
+            # 完全刷新Listbox
+            listbox.delete(0, tk.END)
+            for file in current_files:
+                # 统一格式化显示名称（使用固定宽度字体对齐）
+                max_name_len = 34
+                status_suffix = " --已隐藏" if file in hidden_files else ""
+                
+                # 移除路径只显示文件名
+                display_name = os.path.basename(file)
+                
+                if len(display_name) > max_name_len:
+                    trimmed = display_name[:max_name_len-3] + '...'
+                else:
+                    trimmed = display_name.ljust(max_name_len)
+                
+                listbox.insert(tk.END, f"{trimmed}{status_suffix}")
+
+        c_button = tk.Button(fold_frame, text="--显示/隐藏--", width=25, bg='#aaaaaa', command=toggle_hidden)
+        c_button.pack(side=tk.LEFT, padx=5)  # 使用 side=tk.LEFT 使按钮在同一行
+
+        close_button = tk.Button(fold_frame, text="关闭窗口", width=20, bg='#aaaaaa', command=excluded_window.destroy)
+        close_button.pack(side=tk.LEFT)  # 使用 side=tk.LEFT 使按钮在同一行
+
+
+    button1 = tk.Button(root, text="编辑排除\n快捷方式项目", width=11, height=2, bg='#aaaaaa', fg='white', command=edit_excluded_shortcuts_window)
+    button1.pack(side=tk.RIGHT, padx=0, pady=(3, 3))
+
+    def edit_excluded_shortcuts():
+        """编辑排除的快捷方式项目"""
+        global folder
+        if not folder:
+            print("没有可用的目标文件夹")
+            return
+
+        # 弹出文件选择框
+        selected_file = filedialog.askopenfilename(
+            title="  选择一个exe可执行文件，生成快捷方式到目录文件夹",
+            filetypes=[("Executable Files", "*.exe")]
+        )
+        
+        if selected_file:
+            shortcut_name = os.path.splitext(os.path.basename(selected_file))[0] + ".lnk"
+            shortcut_path = os.path.join(folder, shortcut_name)
+
+            # 如果是lnk文件，直接复制
+            if selected_file.endswith('.lnk'):
+                shutil.copy(selected_file, shortcut_path)
+            else:
+                # 创建新的快捷方式
+                shell = win32com.client.Dispatch("WScript.Shell")
+                shortcut = shell.CreateShortCut(shortcut_path)
+                shortcut.TargetPath = selected_file
+                shortcut.WorkingDirectory = os.path.dirname(selected_file)
+                shortcut.save()
+            
+            print(f"快捷方式已创建: {shortcut_path}")
+    
+    button2 = tk.Button(root, text="快速\n添加", width=6, height=2, bg='#aaaaaa', fg='white') 
+    button2.pack(side=tk.RIGHT, padx=1, pady=(3, 3))
+    button2.config(command=edit_excluded_shortcuts)
 
     # 重定向 stdout 和 stderr 到文本框
     redirector = RedirectPrint(text_box)
@@ -345,16 +484,19 @@ def create_gui():
     main()
     root.mainloop()
 
-def get_lnk_files():
+def get_lnk_files(include_hidden=False):
     # 获取当前工作目录下的所有 .lnk 文件
     lnk_files = glob.glob("*.lnk")
     valid_lnk_files = []
     
-    # 过滤掉指向文件夹的快捷方式
+    # 过滤掉指向文件夹的快捷方式和已隐藏文件
     for lnk in lnk_files:
         try:
+            # 检查是否在隐藏列表中（当不需要包含隐藏文件时）
+            if not include_hidden and lnk in hidden_files:
+                continue
+                
             target_path = get_target_path_from_lnk(lnk)
-            # 只保留指向可执行文件的快捷方式
             if os.path.isdir(target_path):
                 print(f"跳过文件夹快捷方式: {lnk} -> {target_path}")
             else:
@@ -362,7 +504,11 @@ def get_lnk_files():
         except Exception as e:
             print(f"无法获取 {lnk} 的目标路径: {e}")
     
-    print("找到的 .lnk 文件:")
+    if include_hidden:
+        print("找到所有.lnk文件（包含已隐藏）:")
+    else:
+        print("找到的可见.lnk文件:")
+        
     for idx, lnk in enumerate(valid_lnk_files):
         print(f"{idx+1}. {lnk}")
     return valid_lnk_files
@@ -511,13 +657,17 @@ def remove_entries_with_output_image(apps_json, base_names):
     print("已删除不符合条件的条目")
 
 
-def get_url_files():
+def get_url_files(include_hidden=False):
     # 获取当前工作目录下的所有 .url 文件
     url_files = glob.glob("*.url")
     valid_url_files = []
     
     for url in url_files:
         try:
+            # 检查是否在隐藏列表中（当不需要包含隐藏文件时）
+            if not include_hidden and url in hidden_files:
+                continue
+                
             target_path = get_url_target_path(url)
             valid_url_files.append((url, target_path))
         except Exception as e:
@@ -561,7 +711,7 @@ def find_unused_index(apps_json, image_target_paths):
     return index
 
 def main():
-    global folder_selected, onestart, close_after_completion, pseudo_sorting_enabled
+    global folder_selected, onestart, close_after_completion, pseudo_sorting_enabled, lnkandurl_files
     # 获取当前目录下所有有效的 .lnk 和 .url 文件
     os.chdir(folder_selected)  # 设置为用户选择的目录
     lnk_files = get_lnk_files()
