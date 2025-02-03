@@ -43,6 +43,28 @@ class RedirectPrint:
         self.text_widget.yview(tk.END)  # 滚动到文本框底部
     def flush(self):
         pass
+def get_app_install_path():
+    app_name = "sunshine"
+    try:
+        # 打开注册表键，定位到安装路径信息
+        registry_key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, 
+                                      r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")
+        # 遍历注册表中的子项，查找对应应用名称
+        for i in range(winreg.QueryInfoKey(registry_key)[0]):
+            subkey_name = winreg.EnumKey(registry_key, i)
+            subkey = winreg.OpenKey(registry_key, subkey_name)
+            try:
+                display_name, _ = winreg.QueryValueEx(subkey, "DisplayName")
+                if app_name.lower() in display_name.lower():
+                    install_location, _ = winreg.QueryValueEx(subkey, "DisplayIcon")
+                    if os.path.exists(install_location):
+                        return os.path.dirname(install_location)
+            except FileNotFoundError:
+                continue
+    except Exception as e:
+        print(f"Error: {e}")
+    return print(f"未检测到安装目录！")
+APP_INSTALL_PATH=get_app_install_path()
 
 def load_apps_json(json_path):
     # 加载已有的 apps.json
@@ -94,7 +116,7 @@ def save_config():
 
 def delete_output_images():
     """删除 apps.json 中包含 "output_image" 的条目并重启服务"""
-    apps_json_path = r"C:\Program Files\Sunshine\config\apps.json"  # 修改为你的 apps.json 文件路径
+    apps_json_path = f"{APP_INSTALL_PATH}\\config\\apps.json"  # 修改为你的 apps.json 文件路径
     apps_json = load_apps_json(apps_json_path)  # 加载现有的 apps.json 文件
 
     # 删除包含 "output_image" 的条目
@@ -105,7 +127,7 @@ def delete_output_images():
     save_apps_json(apps_json, apps_json_path)
 
     # 删除 output_image 文件夹
-    output_image_folder = r"C:\Program Files\Sunshine\assets\output_image"
+    output_image_folder = f"{APP_INSTALL_PATH}\\assets\\output_image"
     if os.path.exists(output_image_folder):
         shutil.rmtree(output_image_folder)  # 删除文件夹及其内容
         print(f"已删除文件夹: {output_image_folder}")
@@ -201,7 +223,7 @@ def create_gui():
     def pseudo_sorting_option():
         global pseudo_sorting_enabled
         pseudo_sorting_enabled = pseudo_sorting_var.get()  # 获取伪排序选项状态
-        apps_json_path = r"C:\Program Files\Sunshine\config\apps.json"  # 修改为你的 apps.json 文件路径
+        apps_json_path = f"{APP_INSTALL_PATH}\\config\\apps.json"  # 修改为你的 apps.json 文件路径
         apps_json = load_apps_json(apps_json_path)  # 加载现有的 apps.json 文件
         if not pseudo_sorting_enabled:
             for idx, entry in enumerate(apps_json["apps"]):
@@ -251,7 +273,7 @@ def create_gui():
         label = tk.Label(steam_cover_window, text="选择一个已导入的steam项目，使图标封面转变为游戏海报\n（转换后视作独立应用，QSAA不进行处理，删除请前往sunshine）")
         label.pack(pady=10)
 
-        apps_json_path = r"C:\Program Files\Sunshine\config\apps.json"  # 修改为你的 apps.json 文件路径
+        apps_json_path = f"{APP_INSTALL_PATH}\\config\\apps.json"  # 修改为你的 apps.json 文件路径
         apps_json = load_apps_json(apps_json_path)  # 加载现有的 apps.json 文件
         apps_json_save = json.loads(json.dumps(apps_json)) # 序列化和反序列化解除嵌套
         # 只保留 detached 有效的条目
@@ -611,7 +633,7 @@ def generate_app_entry(lnk_file, index):
             "wait-all": "true",
             "exit-timeout": "5",
             "menu-cmd": "",
-            "image-path": f"C:\\Program Files\\Sunshine\\assets\\output_image\\output_image{index}.png",
+            "image-path": f"{APP_INSTALL_PATH}\\assets\\output_image\\output_image{index}.png",
             "detached": [
                 f"\"{os.path.abspath(lnk_file)}\""
             ]
@@ -628,7 +650,7 @@ def generate_app_entry(lnk_file, index):
             "wait-all": "true",
             "exit-timeout": "5",
             "menu-cmd": "",
-            "image-path": f"C:\\Program Files\\Sunshine\\assets\\output_image\\output_image{index}.png",
+            "image-path": f"{APP_INSTALL_PATH}\\assets\\output_image\\output_image{index}.png",
         }
     return entry
 
@@ -722,10 +744,10 @@ def main():
     lnkandurl_files = lnk_files + [url[0] for url in url_files]
 
     # 确保目标文件夹存在
-    output_folder = r"C:\Program Files\Sunshine\assets\output_image"  # 更改为适当的文件夹
+    output_folder = f"{APP_INSTALL_PATH}\\assets\\output_image"  # 更改为适当的文件夹
 
     # 加载现有的 apps.json 文件
-    apps_json_path = r"C:\Program Files\Sunshine\config\apps.json"  # 修改为你的 apps.json 文件路径
+    apps_json_path = f"{APP_INSTALL_PATH}\\config\\apps.json"  # 修改为你的 apps.json 文件路径
     print(f"该应用会创建《{output_folder}》文件夹来存放输出的图像\n修改以下文件《{apps_json_path}》来添加sunshine应用程序")
     if onestart:
         onestart = False
