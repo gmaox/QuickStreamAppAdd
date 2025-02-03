@@ -46,7 +46,9 @@ def is_startup_enabled():
 # 设置程序开机自启
 def set_startup_enabled(enable):
     if enable:
-        app_path = os.path.abspath(sys.argv[0])
+        with open("ToolDesktopGameTray.bat", "w", encoding="utf-8") as file:
+            file.write(f'@echo off\nif "%1"=="hide" goto Begin\nstart mshta vbscript:createobject("wscript.shell").run("""%~0"" hide",0)(window.close)&&exit\n:Begin\ncd /d "{os.path.dirname(psutil.Process(os.getpid()).exe())}"\nstart {os.path.basename(psutil.Process(os.getpid()).exe())}')
+        app_path = os.path.dirname(psutil.Process(os.getpid()).exe())+"\\ToolDesktopGameTray.bat"
         command = [
             'schtasks', '/create', '/tn', "ToolDesktopGameTray", '/tr', f'"{app_path}"',
             '/sc', 'onlogon', '/rl', 'highest', '/f'
