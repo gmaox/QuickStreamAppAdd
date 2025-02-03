@@ -20,10 +20,10 @@ json_path = r"C:\Program Files\Sunshine\config\apps.json"
 with open(json_path, "r", encoding="utf-8") as f:
     data = json.load(f)
 
-# 筛选具有 "output_image" 路径的条目
+# 筛选具有 "output_image" or "igdb" 路径的条目
 games = [
     app for app in data["apps"]
-    if "output_image" in app.get("image-path", "")
+    if "output_image" in app.get("image-path", "") or "igdb" in app.get("image-path", "") or "steam/appcache/librarycache/" in app.get("image-path", "")
 ]
 
 # 读取设置文件
@@ -373,6 +373,7 @@ class GameSelector(QWidget):
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFixedHeight(int(self.height() * 0.9))  # 设置高度为90%
         self.scroll_area.setFixedWidth(int(self.width()))  # 设置宽度为100%
+        self.scroll_area.setAttribute(Qt.WA_AcceptTouchEvents)  #滚动支持
 
         # 隐藏滚动条和边框
         self.scroll_area.setStyleSheet("""
