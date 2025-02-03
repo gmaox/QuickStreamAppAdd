@@ -15,7 +15,7 @@ click_count = 0
 # 在文件开头添加全局变量声明
 global text_label
 def on_icon_label_clicked():
-    subprocess.Popen("DesktopGame.exe")
+    subprocess.Popen(['start', 'DesktopGame.exe'], shell=True)
 # 添加点击事件处理函数
 def on_text_label_clicked():
     global click_count
