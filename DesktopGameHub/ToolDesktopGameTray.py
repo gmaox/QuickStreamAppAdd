@@ -5,7 +5,7 @@ import subprocess
 import win32process
 import os
 import winreg
-import win32gui
+import win32gui,win32event,win32api
 import time
 from threading import Thread
 import psutil
@@ -14,7 +14,11 @@ from pystray import MenuItem as item
 
 #PyInstaller --add-data "fav.ico;." ToolDesktopGameTray.py -i '.\fav.ico' --uac-admin --noconsole
 #PyInstaller --add-data "fav.ico;." ToolDesktopGameTipsWindow.py -i '.\fav.ico' --noconsole
-
+#确保只有一个程序运行
+if __name__ == '__main__':
+    mutex = win32event.CreateMutex(None, False, 'ToolDesktopGameTray')
+    if win32api.GetLastError() > 0:
+        os._exit(0)
 # 获取当前前台窗口
 def has_active_window():
     # 获取当前活动窗口句柄
