@@ -1,11 +1,9 @@
-import sys
 import pystray
 from PIL import Image
 import subprocess
 import win32process
 import os
-import winreg
-import win32gui,win32event,win32api
+import win32gui,win32event,win32api,win32con
 import time
 from threading import Thread
 import psutil
@@ -33,7 +31,22 @@ def has_active_window():
 
     if exe_name == "explorer.exe":
         print("当前窗口为桌面")
-        return True  # 桌面
+        screen_width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+        screen_height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+
+        # 获取窗口位置和大小
+        rect = win32gui.GetWindowRect(hwnd)
+        window_width = rect[2] - rect[0]
+        window_height = rect[3] - rect[1]
+
+        # 判断窗口是否全屏
+        if window_width == screen_width and window_height == screen_height:
+            print(f"当前窗口已全屏{exe_name}")
+            return True
+        else:
+            print(f"当前窗口非全屏 {exe_name} 窗口大小：{window_width} x {window_height} 屏幕分辨率：{screen_width} x {screen_height}")
+            return False
+        #return True  # 桌面
 
 
 # 检查程序是否设置为开机自启
@@ -119,7 +132,7 @@ def listen_gamepad():
                             print("A键被按下，进入游戏选择器")
                             game_path = "DesktopGame.exe"
                             if os.path.exists(game_path):
-                                subprocess.Popen(game_path)
+                                subprocess.Popen(['start', game_path], shell=True)
                                 time.sleep(10)
                             close_window() # 关闭窗口
                             return # 退出 listen_gamepad
