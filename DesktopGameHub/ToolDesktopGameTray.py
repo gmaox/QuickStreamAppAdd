@@ -63,9 +63,10 @@ def is_startup_enabled():
 # 设置程序开机自启
 def set_startup_enabled(enable):
     if enable:
-        with open("ToolDesktopGameTray.bat", "w", encoding="utf-8") as file:
-            file.write(f'@echo off\nif "%1"=="hide" goto Begin\nstart mshta vbscript:createobject("wscript.shell").run("""%~0"" hide",0)(window.close)&&exit\n:Begin\ncd /d "{os.path.dirname(psutil.Process(os.getpid()).exe())}"\nstart {os.path.basename(psutil.Process(os.getpid()).exe())}')
-        app_path = os.path.dirname(psutil.Process(os.getpid()).exe())+"\\ToolDesktopGameTray.bat"
+        # with open("ToolDesktopGameTray.bat", "w", encoding="utf-8") as file:
+        #     file.write(f'@echo off\nif "%1"=="hide" goto Begin\nstart mshta vbscript:createobject("wscript.shell").run("""%~0"" hide",0)(window.close)&&exit\n:Begin\ncd /d "{os.path.dirname(psutil.Process(os.getpid()).exe())}"\nstart {os.path.basename(psutil.Process(os.getpid()).exe())}')
+        # app_path = os.path.dirname(psutil.Process(os.getpid()).exe())+"\\ToolDesktopGameTray.bat"
+        app_path = sys.executable
         command = [
             'schtasks', '/create', '/tn', "ToolDesktopGameTray", '/tr', f'"{app_path}"',
             '/sc', 'onlogon', '/rl', 'highest', '/f'
@@ -273,11 +274,22 @@ def tipswindow(conn):
         sys.exit(1)
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     # 检查程序是否已经运行
     mutex = win32event.CreateMutex(None, False, 'ToolDesktopGameTray')
     if win32api.GetLastError() > 0:
         os._exit(0)
+    # 获取程序所在目录
+    if getattr(sys, 'frozen', False):
+        # 如果是打包后的可执行文件
+        program_directory = os.path.dirname(sys.executable)
+    else:
+        # 如果是脚本运行
+        program_directory = os.path.dirname(os.path.abspath(__file__))
+    # 将工作目录更改为上一级目录
+    os.chdir(program_directory)
     # 创建子进程
+    multiprocessing.freeze_support()
     parent_conn, child_conn = multiprocessing.Pipe()
     p = multiprocessing.Process(target=tipswindow, args=(child_conn,))
     p.start()
