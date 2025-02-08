@@ -103,33 +103,37 @@ def listen_gamepad():
     pygame.init()  # 初始化pygame
     pygame.joystick.init()  # 初始化手柄模块
 
-    joystick_count = pygame.joystick.get_count()
-    joysticks = []
-    for i in range(joystick_count):
-        joystick = pygame.joystick.Joystick(i)
-        joystick.init()
-        joysticks.append(joystick)
-        print(f"Detected joystick {i}: {joystick.get_name()}")
+    def detect_joysticks():
+        joysticks = []
+        joystick_count = pygame.joystick.get_count()
+        for i in range(joystick_count):
+            joystick = pygame.joystick.Joystick(i)
+            joystick.init()
+            joysticks.append(joystick)
+            print(f"Detected joystick {i}: {joystick.get_name()}")
+        return joysticks
 
-    create_window() # 创建窗口
+    joysticks = detect_joysticks()
+    create_window()  # 创建窗口
     time.sleep(1)
     while has_active_window():
-        for i in range(10):
+        for i in range(5):
             for event in pygame.event.get():
-                if event.type == pygame.JOYBUTTONDOWN:  # 检测手柄按键按下事件
+                if event.type == pygame.JOYDEVICEADDED:
+                    joysticks = detect_joysticks()  # 更新手柄列表
+                elif event.type == pygame.JOYBUTTONDOWN:  # 检测手柄按键按下事件
                     for joystick in joysticks:
                         if joystick.get_button(0):  # 假设 A 键是第一个按钮
                             print("A键被按下，进入游戏选择器")
                             game_path = "DesktopGame.exe"
-                            if os.path.exists:
-                                #subprocess.Popen(['powershell', 'Start-Process', '-Verb', 'runAs', '-FilePath', game_path], shell=True)
+                            if os.path.exists(game_path):
                                 subprocess.Popen(game_path)
                                 time.sleep(10)
-                            close_window() # 关闭窗口
-                            return # 退出 listen_gamepad
+                            close_window()  # 关闭窗口
+                            return  # 退出 listen_gamepad
             time.sleep(0.1)
     print("退出桌面")
-    close_window() # 关闭窗口
+    close_window()  # 关闭窗口
 
 
 # 退出程序
