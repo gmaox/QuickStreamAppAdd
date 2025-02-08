@@ -2,8 +2,11 @@ import pystray
 from PIL import Image
 import subprocess
 import win32process
-import os
-import win32gui,win32event,win32api,win32con
+import os,sys,multiprocessing
+from PyQt5.QtWidgets import QWidget, QApplication, QLabel, QHBoxLayout
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QPixmap, QFont
+import win32gui,win32event,win32api
 import time
 from threading import Thread
 import psutil
@@ -12,12 +15,6 @@ from pystray import MenuItem as item
 
 #PyInstaller --add-data "fav.ico;." ToolDesktopGameTray.py -i '.\fav.ico' --uac-admin --noconsole
 #PyInstaller --add-data "fav.ico;." ToolDesktopGameTipsWindow.py -i '.\fav.ico' --noconsole
-#确保只有一个程序运行
-if __name__ == '__main__':
-    mutex = win32event.CreateMutex(None, False, 'ToolDesktopGameTray')
-    if win32api.GetLastError() > 0:
-        os._exit(0)
-# 获取当前前台窗口
 def has_active_window():
     # 获取当前活动窗口句柄
     hwnd = win32gui.GetForegroundWindow()
@@ -97,23 +94,9 @@ def run_game():
     Thread(target=check_loop, daemon=True).start()
 
 def create_window():
-    subprocess.Popen(["ToolDesktopGameTipsWindow.exe"]) 
+    parent_conn.send(True)
 def close_window():
-    try:
-        for process in psutil.process_iter(['pid', 'name']):
-            if process.info['name'] == "ToolDesktopGameTipsWindow.exe":
-                # 遍历所有子进程并终止它们
-                for child in process.children(recursive=True):
-                    child.kill()
-                    print(f"已结束子进程 PID: {child.pid}")
-                # 最后结束父进程
-                process.kill()
-                print(f"已关闭 PID {process.info['pid']} 的程序。")
-                return
-    except psutil.NoSuchProcess:
-        print(f"未找到 ToolDesktopGameTipsWindow.exe 程序。")
-    except Exception as e:
-        print(f"关闭程序时发生错误: {e}")
+    parent_conn.send(False)
 
 # 监听手柄的 A 键
 def listen_gamepad():
@@ -151,8 +134,8 @@ def listen_gamepad():
 
 # 退出程序
 def on_exit(icon, item):
-    close_window()
     icon.stop()
+    os._exit(0)
 
 
 # 切换开机自启
@@ -176,7 +159,123 @@ def create_tray_icon():
     icon = pystray.Icon("game_launcher", image, "单击启动DesktopGame", menu)
     icon.run_detached()
 
+def tipswindow(conn):
+    global click_count, text_label, window  # 添加window到全局变量
+    print(f"Worker received: {conn.recv()}")
+    click_count = 0
+    
+    def window_control_thread():
+        while True:
+            try:
+                show_window = conn.recv()
+                if show_window:
+                    window.show()
+                else:
+                    window.hide()
+            except EOFError:
+                break
+    
+    def on_icon_label_clicked():
+        subprocess.Popen(['start', 'DesktopGame.exe'], shell=True)
+        
+    def on_text_label_clicked():
+        global click_count
+        click_count += 1
+        if click_count == 1:
+            text_label.setText("再次点击退出提示窗口   ")
+        elif click_count == 2:
+            os._exit(0)
+            
+    def create_window():
+        global text_label, window  # 修改这里
+        try:
+            # 创建窗口
+            window = QWidget()
+            window.setWindowTitle("Game Launcher")
+
+            # 设置窗口无边框，设置窗口置顶, 设置鼠标穿透
+            window.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+            # window.setAttribute(Qt.WA_TransparentForMouseEvents)
+            # 设置窗口透明度
+            window.setWindowOpacity(0.6)
+
+            # 获取屏幕尺寸
+            screen = QApplication.desktop().screenGeometry()
+            window_width = 300  # 增加窗口宽度，便于查看
+            window_height = 50  # 增加窗口高度，便于查看
+            x = ((screen.width() - window_width) // 2)-50
+            y = 0  # 顶部
+            window.setGeometry(x, y, window_width, window_height)
+
+            # 在窗口中显示图标和文字
+            icon_label = QLabel()
+            icon_path = os.path.join(os.path.dirname(__file__), "fav.ico")  # 获取图标路径
+            if os.path.exists(icon_path):
+                icon_pixmap = QPixmap(icon_path)
+                icon_pixmap = icon_pixmap.scaled(50, 50, Qt.KeepAspectRatio)  # 缩放图标，保持宽高比
+                icon_label.setPixmap(icon_pixmap)
+                print(f"图标加载成功: {icon_path}")
+            else:
+                print(f"图标文件未找到: {icon_path}")
+
+            icon_label.setAlignment(Qt.AlignLeft)  # 将图标左对齐
+
+            # 文字
+            frame = QWidget()
+            frame.setStyleSheet("background-color: lightgray;")
+            text_label = QLabel("点击手柄A键进入DesktopGame", frame)  # 这里定义 text_label
+            text_label.setAlignment(Qt.AlignCenter)
+
+            # Set layout for the frame
+            frame_layout = QHBoxLayout(frame)
+            frame_layout.addWidget(text_label)
+            frame.setLayout(frame_layout)
+
+            # 放大文字
+            font = QFont()
+            font.setPointSize(18)  # 设置字体大小为 18
+            text_label.setFont(font)
+
+            # 水平布局，图标和文字并排
+            layout = QHBoxLayout()
+            layout.addWidget(icon_label)  # 添加图标
+            layout.addWidget(text_label)  # 添加文字
+            window.setLayout(layout)
+
+            # 连接点击事件
+            text_label.mousePressEvent = lambda event: on_text_label_clicked()
+            icon_label.mousePressEvent = lambda event: on_icon_label_clicked()
+
+            window.show() 
+            return window
+        except Exception as e:
+            print(f"创建窗口时发生错误: {e}")
+            return None
+
+    try:
+        app = QApplication(sys.argv)
+        
+        window = create_window()
+        if window:
+            # 创建并启动控制线程
+            Thread(target=window_control_thread, daemon=True).start()
+            
+            sys.exit(app.exec_())
+        else:
+            print("窗口创建失败，程序退出。")
+            sys.exit(1)
+    except Exception as e:
+        print(f"程序运行时发生错误: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
+    # 检查程序是否已经运行
+    mutex = win32event.CreateMutex(None, False, 'ToolDesktopGameTray')
+    if win32api.GetLastError() > 0:
+        os._exit(0)
+    # 创建子进程
+    parent_conn, child_conn = multiprocessing.Pipe()
+    p = multiprocessing.Process(target=tipswindow, args=(child_conn,))
+    p.start()
     run_game()
     create_tray_icon()
