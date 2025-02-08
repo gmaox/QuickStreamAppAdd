@@ -31,20 +31,23 @@ def has_active_window():
 
     if exe_name == "explorer.exe":
         print("当前窗口为桌面")
-        screen_width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-        screen_height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+        # screen_width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+        # screen_height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
 
         # 获取窗口位置和大小
-        rect = win32gui.GetWindowRect(hwnd)
-        window_width = rect[2] - rect[0]
-        window_height = rect[3] - rect[1]
+        # rect = win32gui.GetWindowRect(hwnd)
+        class_name = win32gui.GetClassName(hwnd)
+        print("窗口类名:", class_name)
+        # window_width = rect[2] - rect[0]
+        # window_height = rect[3] - rect[1]
 
-        # 判断窗口是否全屏
-        if window_width == screen_width and window_height == screen_height:
-            print(f"当前窗口已全屏{exe_name}")
+        # # 判断窗口是否全屏
+        # if window_width == screen_width and window_height == screen_height:
+        if class_name == 'Shell_TrayWnd' or  class_name == 'WorkerW' or class_name == 'Progman':  #任务栏/桌面区域/桌面
+            print(f"当前窗口已全屏{exe_name} 类名{class_name}")
             return True
         else:
-            print(f"当前窗口非全屏 {exe_name} 窗口大小：{window_width} x {window_height} 屏幕分辨率：{screen_width} x {screen_height}")
+            print(f"当前窗口非全屏 {exe_name} 类名{class_name}")
             return False
         #return True  # 桌面
 
@@ -84,7 +87,11 @@ def run_game():
     def check_loop():
         while True:
             if has_active_window():
-                listen_gamepad()
+                for process in psutil.process_iter(['pid', 'name']):
+                    if process.info['name'] == "DesktopGame.exe":
+                        break
+                else:
+                    listen_gamepad()
             time.sleep(1)
 
     Thread(target=check_loop, daemon=True).start()
@@ -131,14 +138,15 @@ def listen_gamepad():
                         if joystick.get_button(0):  # 假设 A 键是第一个按钮
                             print("A键被按下，进入游戏选择器")
                             game_path = "DesktopGame.exe"
-                            if os.path.exists(game_path):
-                                subprocess.Popen(['start', game_path], shell=True)
+                            if os.path.exists:
+                                #subprocess.Popen(['powershell', 'Start-Process', '-Verb', 'runAs', '-FilePath', game_path], shell=True)
+                                subprocess.Popen(game_path)
                                 time.sleep(10)
                             close_window() # 关闭窗口
                             return # 退出 listen_gamepad
             time.sleep(0.1)
     print("退出桌面")
-    close_window() # 退出桌面时关闭窗口
+    close_window() # 关闭窗口
 
 
 # 退出程序
