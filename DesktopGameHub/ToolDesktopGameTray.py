@@ -140,6 +140,9 @@ def listen_gamepad():
 # 退出程序
 def on_exit(icon, item):
     icon.stop()
+    #parent_conn.send(False)  # 关闭提示窗口
+    p.terminate()  # 终止子进程
+    p.join()  # 等待子进程结束
     os._exit(0)
 
 
