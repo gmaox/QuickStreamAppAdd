@@ -28,25 +28,14 @@ def has_active_window():
 
     if exe_name == "explorer.exe":
         print("当前窗口为桌面")
-        # screen_width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-        # screen_height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
-
-        # 获取窗口位置和大小
-        # rect = win32gui.GetWindowRect(hwnd)
         class_name = win32gui.GetClassName(hwnd)
         print("窗口类名:", class_name)
-        # window_width = rect[2] - rect[0]
-        # window_height = rect[3] - rect[1]
-
-        # # 判断窗口是否全屏
-        # if window_width == screen_width and window_height == screen_height:
         if class_name == 'Shell_TrayWnd' or  class_name == 'WorkerW' or class_name == 'Progman':  #任务栏/桌面区域/桌面
             print(f"当前窗口已全屏{exe_name} 类名{class_name}")
             return True
         else:
             print(f"当前窗口非全屏 {exe_name} 类名{class_name}")
             return False
-        #return True  # 桌面
 
 
 # 检查程序是否设置为开机自启
@@ -63,9 +52,6 @@ def is_startup_enabled():
 # 设置程序开机自启
 def set_startup_enabled(enable):
     if enable:
-        # with open("ToolDesktopGameTray.bat", "w", encoding="utf-8") as file:
-        #     file.write(f'@echo off\nif "%1"=="hide" goto Begin\nstart mshta vbscript:createobject("wscript.shell").run("""%~0"" hide",0)(window.close)&&exit\n:Begin\ncd /d "{os.path.dirname(psutil.Process(os.getpid()).exe())}"\nstart {os.path.basename(psutil.Process(os.getpid()).exe())}')
-        # app_path = os.path.dirname(psutil.Process(os.getpid()).exe())+"\\ToolDesktopGameTray.bat"
         app_path = sys.executable
         command = [
             'schtasks', '/create', '/tn', "ToolDesktopGameTray", '/tr', f'"{app_path}"',
@@ -166,7 +152,7 @@ def create_tray_icon():
     # 创建并显示悬浮窗
     icon = pystray.Icon("game_launcher", image, "单击启动DesktopGame", menu)
     icon.run_detached()
-
+#子进程1：创建提示窗口
 def tipswindow(conn):
     global click_count, text_label, window  # 添加window到全局变量
     print(f"Worker received: {conn.recv()}")
@@ -200,7 +186,7 @@ def tipswindow(conn):
             # 创建窗口
             window = QWidget()
             window.setWindowTitle("Game Launcher")
-
+            window.setStyleSheet("background-color: #1e1e1e;")  # 设置深灰背景色
             # 设置窗口无边框，设置窗口置顶, 设置鼠标穿透
             window.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
             # window.setAttribute(Qt.WA_TransparentForMouseEvents)
@@ -231,8 +217,9 @@ def tipswindow(conn):
             # 文字
             frame = QWidget()
             frame.setStyleSheet("background-color: lightgray;")
-            text_label = QLabel("点击手柄A键进入DesktopGame", frame)  # 这里定义 text_label
+            text_label = QLabel("点击手柄进入DesktopGame", frame)  # 这里定义 text_label
             text_label.setAlignment(Qt.AlignCenter)
+            text_label.setStyleSheet("color: White;")  # 设置文字颜色
 
             # Set layout for the frame
             frame_layout = QHBoxLayout(frame)
@@ -275,6 +262,71 @@ def tipswindow(conn):
     except Exception as e:
         print(f"程序运行时发生错误: {e}")
         sys.exit(1)
+#线程：设置窗口置顶
+def topmostset():
+    import ctypes
+    import time,pyautogui
+    from ctypes import wintypes
+
+    # 定义 Windows API 函数
+    SetWindowPos = ctypes.windll.user32.SetWindowPos
+    SetForegroundWindow = ctypes.windll.user32.SetForegroundWindow
+    FindWindow = ctypes.windll.user32.FindWindowW
+
+    # 定义常量
+    HWND_TOPMOST = -1
+    SWP_NOMOVE = 0x0002
+    SWP_NOSIZE = 0x0001
+
+    # 定义 SetWindowPos 函数的参数类型和返回类型
+    SetWindowPos.restype = wintypes.BOOL
+    SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+
+    SetForegroundWindow.restype = wintypes.BOOL
+    SetForegroundWindow.argtypes = [wintypes.HWND]
+
+    # 获取窗口句柄
+    def get_hwnd(title):
+        hwnd = FindWindow(None, title)  # 根据窗口标题获取句柄
+        return hwnd
+
+    # 定时器回调函数
+    def set_topmost_periodically(hwnd, interval):
+        # 设置窗口为最上层
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
+        time.sleep(0.3)
+        screen_width, screen_height = pyautogui.size()
+        pyautogui.FAILSAFE = False
+        # 设置右下角坐标
+        right_bottom_x = screen_width - 1  # 最右边
+        right_bottom_y = screen_height - 1  # 最底部
+
+        # 移动鼠标到屏幕右下角并进行右键点击
+        pyautogui.rightClick(right_bottom_x, right_bottom_y)
+        time.sleep(1)
+        hwnda = win32gui.GetForegroundWindow()
+        if win32gui.GetWindowText(hwnda) != "游戏选择器":
+            print("游戏窗口未激活")
+            set_topmost_periodically(hwnd, interval)
+        else:
+            while True:
+                for process in psutil.process_iter(['pid', 'name']):
+                    if process.info['name'] == "DesktopGame.exe":
+                        break
+                else:
+                    main()
+                time.sleep(1)
+    def main():
+        # 设置窗口标题
+        window_title = "游戏选择器"  # 例如这里假设你要将记事本窗口置顶
+        hwnd = get_hwnd(window_title)
+        if hwnd != 0:
+            print(f"找到窗口句柄：{hwnd}")
+            interval = 0.5  # 每0.5秒更新一次
+            set_topmost_periodically(hwnd, interval)
+        time.sleep(1)
+        main()
+    main()
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
@@ -296,5 +348,6 @@ if __name__ == "__main__":
     parent_conn, child_conn = multiprocessing.Pipe()
     p = multiprocessing.Process(target=tipswindow, args=(child_conn,))
     p.start()
+    Thread(target=topmostset, daemon=True).start()
     run_game()
     create_tray_icon()
