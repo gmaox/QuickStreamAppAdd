@@ -151,7 +151,7 @@ def create_tray_icon():
 
     # 创建并显示悬浮窗
     icon = pystray.Icon("game_launcher", image, "单击启动DesktopGame", menu)
-    icon.run_detached()
+    icon.run()
 #子进程1：创建提示窗口
 def tipswindow(conn):
     global click_count, text_label, window  # 添加window到全局变量
