@@ -13,7 +13,7 @@
 
 
 <p>操作演示：http://b23.tv/6dh80eP
-<p>相关开源项目-将playnite游戏导入到sunshine：https://github.com/MichaelMKenny/SunshineAppExpor
+<p>相关开源项目-将playnite游戏导入到sunshine：https://github.com/MichaelMKenny/SunshineAppExport
   
 <hr>
 <details>
