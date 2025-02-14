@@ -13,6 +13,8 @@
 
 
 <p>操作演示：http://b23.tv/6dh80eP
+<p>相关链接-将playnite游戏导入到sunshine：https://github.com/MichaelMKenny/SunshineAppExpor
+  
 <hr>
 另外还有游戏启动器可体验（还不完善不推荐使用<p>
   
