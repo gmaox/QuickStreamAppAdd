@@ -1,6 +1,7 @@
 import sys
 import json
 import pygame
+import configparser
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QGridLayout, QWidget, QPushButton, QLabel, QHBoxLayout, QFileDialog, QSlider, QTextEdit, QProgressBar, QScrollArea, QFrame
 from PyQt5.QtGui import QPixmap, QIcon
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
@@ -222,14 +223,13 @@ class GameSelector(QWidget):
         self.setWindowTitle("游戏选择器")
         self.setGeometry(100, 100, 1280, 720)  # 默认窗口大小
         self.setWindowFlags(Qt.FramelessWindowHint)  # 全屏无边框
-        self.showFullScreen()
-
-        # 设置背景颜色
         self.setStyleSheet("background-color: #1e1e1e;")  # 设置深灰背景色
-
+        self.showFullScreen()
         # 确保窗口捕获焦点
         self.setFocusPolicy(Qt.StrongFocus)
         self.setFocus()
+        self.activateWindow()
+        self.raise_()
 
         # 游戏索引和布局
         self.current_index = 0  # 从第一个按钮开始
@@ -1036,6 +1036,9 @@ class GameControllerThread(QThread):
 class FloatingWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        bat_dir = './bat'
+        if not os.path.exists(bat_dir):
+            os.makedirs(bat_dir)  # 创建目录
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Popup)
         self.setStyleSheet("""
             QWidget {
@@ -1069,27 +1072,19 @@ class FloatingWindow(QWidget):
     def get_files(self):
         """获取目录中的文件"""
         files = []
-        
         # 获取当前目录的文件
-        for file in os.listdir('.'):
-            if file.endswith(('.bat', '.url')) and not file.endswith('.lnk'):
-                files.append({
-                    "name": os.path.splitext(file)[0],
-                    "path": file
-                })
-        
-        # 获取额外目录中的文件
-        extra_paths = settings.get("extra_paths", [])
-        for path in extra_paths:
-            if os.path.exists(path):
-                for file in os.listdir(path):
-                    if file.endswith(('.bat', '.url')) and not file.endswith('.lnk'):
-                        full_path = os.path.join(path, file)
-                        files.append({
-                            "name": os.path.splitext(file)[0],
-                            "path": full_path
-                        })
-        
+            # 获取目录中的所有文件和文件夹
+        all_files = os.listdir('./bat/')
+
+        # 过滤掉文件夹，保留文件
+        filess = [f for f in all_files if os.path.isfile(os.path.join('./bat/', f))]
+        for file in filess:
+            #if file.endswith(('.bat', '.url')) and not file.endswith('.lnk'):
+            files.append({
+                "name": os.path.splitext(file)[0],
+                "path": file
+            })
+
         return files
     
     def create_buttons(self):
@@ -1116,9 +1111,8 @@ class FloatingWindow(QWidget):
             self.buttons.append(btn)
             self.layout.addWidget(btn)
         
-        # 添加选择文件夹按钮
-        select_folder_btn = QPushButton("➕ 添加文件夹")
-        select_folder_btn.setStyleSheet("""
+        select_add_btn = QPushButton("➕ 添加项目")
+        select_add_btn.setStyleSheet("""
             QPushButton {
                 background-color: transparent;
                 color: #888888;
@@ -1132,37 +1126,391 @@ class FloatingWindow(QWidget):
                 color: white;
             }
         """)
-        select_folder_btn.clicked.connect(self.select_folder)
-        self.layout.addWidget(select_folder_btn)
+        select_add_btn.clicked.connect(self.select_add)
+        self.layout.addWidget(select_add_btn)
+
+        select_del_btn = QPushButton("❌ 删除项目")
+        select_del_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #888888;
+                text-align: left;
+                padding: 10px;
+                border: none;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.1);
+                color: white;
+            }
+        """)
+        select_del_btn.clicked.connect(self.select_del)
+        self.layout.addWidget(select_del_btn)
     
-    def select_folder(self):
-        """选择文件夹"""
-        folder = QFileDialog.getExistingDirectory(
-            self,
-            "选择文件夹",
-            "",
-            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
-        )
-        
-        if folder:
-            # 确保 extra_paths 存在
-            if "extra_paths" not in settings:
-                settings["extra_paths"] = []
-            
-            # 添加新路径（如果不存在）
-            if folder not in settings["extra_paths"]:
-                settings["extra_paths"].append(folder)
-                
-                # 保存设置
-                with open(settings_path, "w", encoding="utf-8") as f:
-                    json.dump(settings, f, indent=4)
-                
-                # 重新加载按钮
-                for button in self.buttons:
-                    button.setParent(None)
-                self.buttons.clear()
-                self.create_buttons()
-                self.update_highlight()
+    def select_add(self):
+        self.show_add_item_window()
+    def select_del(self):
+        self.show_del_item_window()
+
+    def show_add_item_window(self):
+        """显示添加项目的悬浮窗"""
+        # 创建悬浮窗口
+        self.add_item_window = QWidget(self, Qt.Popup)
+        self.add_item_window.setWindowFlags(Qt.FramelessWindowHint | Qt.Popup)
+        self.add_item_window.setStyleSheet("""
+            QWidget {
+                background-color: rgba(46, 46, 46, 0.95);
+                border-radius: 15px;
+                border: 2px solid #444444;
+            }
+        """)
+
+        layout = QVBoxLayout(self.add_item_window)
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        # 第一行：编辑名称
+        self.name_edit = QTextEdit()
+        self.name_edit.setPlaceholderText("输入名称")
+        self.name_edit.setFixedHeight(50)  # 设置固定高度为 30 像素
+        self.name_edit.setStyleSheet("""
+            QTextEdit {
+                background-color: rgba(255, 255, 255, 0.1);
+                color: white;
+                border: 1px solid #444444;
+                border-radius: 10px;
+                padding: 10px;
+            }
+        """)
+        layout.addWidget(self.name_edit)
+
+        # 第二行：显示选择的项目
+        self.selected_item_label = QLabel("")
+        self.selected_item_label.setStyleSheet("""
+            QLabel {
+                color: white;
+                font-size: 16px;
+                font-weight: 400;
+            }
+        """)
+        layout.addWidget(self.selected_item_label)
+
+        # 第三行：选择bat、创建自定义bat按钮
+        button_layout = QHBoxLayout()
+
+        self.select_bat_button = QPushButton("选择文件")
+        self.select_bat_button.setStyleSheet("""
+            QPushButton {
+                background-color: #5f5f5f;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #808080;
+            }
+            QPushButton:pressed {
+                background-color: #333333;
+            }
+        """)
+        self.select_bat_button.clicked.connect(self.select_bat_file)
+        button_layout.addWidget(self.select_bat_button)
+
+        self.create_custom_bat_button = QPushButton("创建自定义bat")
+        self.create_custom_bat_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 8px 16px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:pressed {
+                background-color: #388e3c;
+            }
+        """)
+        self.create_custom_bat_button.clicked.connect(self.show_custom_bat_editor)
+        button_layout.addWidget(self.create_custom_bat_button)
+
+        layout.addLayout(button_layout)
+
+        # 第四行：保存按钮
+        self.save_button = QPushButton("保存")
+        self.save_button.setStyleSheet("""
+            QPushButton {
+                background-color: #008CBA;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 10px 20px;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background-color: #007B9E;
+            }
+            QPushButton:pressed {
+                background-color: #006F8A;
+            }
+        """)
+        self.save_button.clicked.connect(self.save_item)
+        layout.addWidget(self.save_button)
+
+        self.add_item_window.setLayout(layout)
+        self.add_item_window.show()
+    def show_del_item_window(self): 
+        """显示删除项目的悬浮窗"""
+        # 创建悬浮窗口
+        self.del_item_window = QWidget(self, Qt.Popup)
+        self.del_item_window.setWindowFlags(Qt.FramelessWindowHint | Qt.Popup)
+        self.del_item_window.setStyleSheet("""
+            QWidget {
+                background-color: rgba(46, 46, 46, 0.95);
+                border-radius: 15px;
+                border: 2px solid #444444;
+            }
+        """)
+        self.del_item_window.move(30, 100)
+
+        # 使用QVBoxLayout来管理布局
+        layout = QVBoxLayout(self.del_item_window)
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        # 获取文件列表并创建按钮
+        files = self.get_files()  # 获取文件列表
+        for file in files:
+            file_button = QPushButton(file["name"])
+            file_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #444444;
+                    color: white;
+                    text-align: center;
+                    padding: 10px;
+                    border: none;
+                    font-size: 16px;
+                }
+                QPushButton:hover {
+                    background-color: #555555;
+                }
+            """)
+            # 连接每个按钮点击事件到处理函数
+            file_button.clicked.connect(lambda checked, f=file, btn=file_button: self.handle_del_file_button_click(f, btn))
+            layout.addWidget(file_button)
+
+        # 刷新项目按钮
+        select_de_btn = QPushButton("刷新项目")
+        select_de_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #888888;
+                text-align: left;
+                padding: 10px;
+                border: none;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.1);
+                color: white;
+            }
+        """)
+        select_de_btn.clicked.connect(self.select_de)
+
+        # 在layout上添加刷新按钮
+        layout.addWidget(select_de_btn)
+
+        # 设置布局
+        self.del_item_window.setLayout(layout)
+        self.del_item_window.show()
+
+    def select_de(self):
+        """刷新项目"""
+        self.del_item_window.close()  # 关闭当前窗口
+        # 重新加载按钮
+        for button in self.buttons:
+            button.setParent(None)
+        self.buttons.clear()
+        self.create_buttons()
+        self.update_highlight()
+
+    def handle_del_file_button_click(self, file, button):
+        """处理删除文件按钮点击事件"""
+        if button.property("clicked_once"):
+            # 第二次点击，删除文件
+            self.remove_file(file)
+        else:
+            # 第一次点击，变红色并更改文本
+            button.setStyleSheet("""
+                QPushButton {
+                    background-color: red;
+                    color: white;
+                    text-align: center;
+                    padding: 10px;
+                    border: none;
+                    font-size: 16px;
+                }
+            """)
+            button.setText("删除？(再次点击确认)")
+            button.setProperty("clicked_once", True)
+
+    def remove_file(self, file):
+        """删除文件并更新设置"""
+        file_path = os.path.join('./bat/', file["path"])  # 获取文件的完整路径
+        if os.path.exists(file_path):
+            os.remove(file_path)  # 删除文件
+
+            # 重新加载删除项窗口，确保界面更新
+            self.del_item_window.close()  # 关闭删除项目窗口
+            self.show_del_item_window()  # 重新加载删除项目窗口
+        else:
+            print(f"文件 {file['name']} 不存在！")
+    def select_bat_file(self):
+        """选择bat文件"""
+        file_dialog = QFileDialog(self, "选择要启动的文件", "", "All Files (*.*)")
+        file_dialog.setFileMode(QFileDialog.ExistingFile)
+        if file_dialog.exec_():
+            selected_file = file_dialog.selectedFiles()[0]
+            self.selected_item_label.setText(selected_file)
+            self.name_edit.setText(os.path.splitext(os.path.basename(selected_file))[0])  # 只填入文件名部分
+            # 保持悬浮窗可见
+            self.add_item_window.show()
+
+    def show_custom_bat_editor(self):
+        """显示自定义bat编辑器"""
+        # 创建自定义 BAT 编辑器窗口
+        self.custom_bat_editor = QWidget(self, Qt.Popup)
+        self.custom_bat_editor.setWindowFlags(Qt.FramelessWindowHint | Qt.Popup)
+        self.custom_bat_editor.setStyleSheet("""
+            QWidget {
+                background-color: rgba(46, 46, 46, 0.95);
+                border-radius: 15px;
+                border: 2px solid #444444;
+            }
+        """)
+
+        layout = QVBoxLayout(self.custom_bat_editor)
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        # 文本框：显示和编辑 bat 脚本
+        self.bat_text_edit = QTextEdit()
+        self.bat_text_edit.setPlaceholderText("请输入脚本内容...")
+        self.bat_text_edit.setStyleSheet("""
+            QTextEdit {
+                background-color: rgba(255, 255, 255, 0.1);
+                color: white;
+                border: 1px solid #444444;
+                border-radius: 10px;
+                padding: 12px;
+                font-size: 14px;           
+            }
+        """)
+        layout.addWidget(self.bat_text_edit)
+
+        # 添加程序按钮
+        self.add_program_button = QPushButton("添加程序")
+        self.add_program_button.setStyleSheet("""
+            QPushButton {
+                background-color: #5f5f5f;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 10px 20px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #808080;
+            }
+            QPushButton:pressed {
+                background-color: #333333;
+            }
+        """)
+        self.add_program_button.clicked.connect(self.add_program_to_bat)
+        layout.addWidget(self.add_program_button)
+
+        # 保存bat按钮
+        self.save_bat_button = QPushButton("保存bat")
+        self.save_bat_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 10px 20px;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:pressed {
+                background-color: #388e3c;
+            }
+        """)
+        self.save_bat_button.clicked.connect(self.save_custom_bat)
+        layout.addWidget(self.save_bat_button)
+        self.custom_bat_editor.move(0, 100)
+        self.custom_bat_editor.setLayout(layout)
+        self.custom_bat_editor.show()
+
+
+    def add_program_to_bat(self):
+        """添加程序到bat"""
+        file_dialog = QFileDialog(self, "选择一个可执行文件", "", "Executable Files (*.exe)")
+        file_dialog.setFileMode(QFileDialog.ExistingFile)
+        if file_dialog.exec_():
+            selected_file = file_dialog.selectedFiles()[0]
+            program_dir = os.path.dirname(selected_file)
+            self.bat_text_edit.append(f'cd /d "{program_dir}"\nstart "" "{selected_file}"\n')
+            self.add_item_window.show()
+            self.custom_bat_editor.show()
+
+    def save_custom_bat(self):
+        """保存自定义bat"""
+        bat_dir = './bat/Customize'
+        if not os.path.exists(bat_dir):
+            os.makedirs(bat_dir)  # 创建目录
+        bat_content = self.bat_text_edit.toPlainText()
+        bat_path = os.path.join(program_directory, "./bat/Customize/Customize.bat")
+        counter = 1
+        while os.path.exists(bat_path):
+            bat_path = os.path.join(program_directory, f"./bat/Customize/Customize_{counter}.bat")
+            counter += 1
+        bat_path = os.path.abspath(bat_path)
+        with open(bat_path, "w", encoding="utf-8") as f:
+            f.write(bat_content)
+        self.selected_item_label.setText(bat_path)
+        self.custom_bat_editor.hide()
+        self.add_item_window.show()
+
+    def save_item(self):
+        """保存项目"""
+        name = self.name_edit.toPlainText()
+        path = self.selected_item_label.text()  
+        bat_dir = './bat'
+        if not os.path.exists(bat_dir):
+            os.makedirs(bat_dir)
+
+        # 创建 bat 文件的路径
+        bat_file_path = os.path.join(bat_dir, f"{name}.bat")
+
+        # 写入内容到 bat 文件
+        with open(bat_file_path, 'w') as bat_file:
+            bat_file.write(f'start "" "{path}"\n')
+
+        print(f"成功创建 bat 文件: {bat_file_path}")  
+        self.add_item_window.hide()
+
+        # 重新加载按钮
+        for button in self.buttons:
+            button.setParent(None)
+        self.buttons.clear()
+        self.create_buttons()
+        self.update_highlight()
     
     def sort_files(self):
         """排序文件"""
