@@ -481,6 +481,7 @@ class GameSelector(QWidget):
     def __init__(self):
         global play_reload
         super().__init__()
+        self.setWindowIcon(QIcon('fav.ico'))
         self.scale_factor = settings.get("scale_factor", 1.0)  # 从设置中读取缩放因数
         self.setWindowTitle("游戏选择器")
         
@@ -1308,6 +1309,8 @@ class GameSelector(QWidget):
 
     def refresh_games(self):
         """刷新游戏列表，处理 extra_paths 中的快捷方式"""
+        subprocess.Popen("QuickStreamAppAdd.exe", shell=True)
+        return
         if not self.is_admin():
             print("需要管理员权限才能刷新游戏列表。尝试获取管理员权限...")
             self.run_as_admin()
@@ -1443,9 +1446,7 @@ class GameControllerThread(QThread):
         # 将悬浮窗置于最上层并显示
         self.parent.launch_overlay.raise_()
         self.parent.launch_overlay.show()
-
-        # 5秒后自动隐藏
-        QTimer.singleShot(5000, self.parent.launch_overlay.hide)
+        QTimer.singleShot(6000, self.parent.launch_overlay.hide)
 
     def run(self):
         """监听手柄输入"""
@@ -2353,7 +2354,7 @@ class SettingsWindow(QWidget):
         #self.layout.addWidget(self.extra_paths_button)
 
         # 添加刷新游戏按钮
-        self.refresh_button = QPushButton("---刷新游戏---")
+        self.refresh_button = QPushButton("---管理---")
         self.refresh_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: #444444;
@@ -2368,10 +2369,10 @@ class SettingsWindow(QWidget):
             }}
         """)
         self.refresh_button.clicked.connect(parent.refresh_games)
-        #self.layout.addWidget(self.refresh_button)
+        self.layout.addWidget(self.refresh_button)
 
         # 添加切换 killexplorer 状态的按钮
-        self.killexplorer_button = QPushButton(f"Kill Explorer: {'开启' if settings.get('killexplorer', False) else '关闭'}")
+        self.killexplorer_button = QPushButton(f"沉浸模式 {'√' if settings.get('killexplorer', False) else '×'}")
         self.killexplorer_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: #444444;
@@ -2571,7 +2572,7 @@ class SettingsWindow(QWidget):
         scale_factor = value / 10.0
         self.parent().scale_factor = scale_factor
         self.scale_factor_label.setText(f"界面缩放因数: {scale_factor:.1f}")
-
+        self.parent().reload_interface()
         # 保存缩放因数设置
         settings["scale_factor"] = scale_factor
         with open(settings_path, "w", encoding="utf-8") as f:
