@@ -509,6 +509,7 @@ class GameSelector(QWidget):
         self.grid_layout = QGridLayout()
         self.grid_layout.setSpacing(int(20 * self.scale_factor))  # 设置按钮之间的间距
 
+
         # 从设置中读取 row_count，如果不存在则使用默认值
         self.row_count = settings.get("row_count", 6)  # 每行显示的按钮数量
 
@@ -639,6 +640,7 @@ class GameSelector(QWidget):
         # 主布局
         main_layout = QVBoxLayout()
         main_layout.addLayout(self.top_layout)  # 添加顶部布局
+        main_layout.setAlignment(Qt.AlignTop)
 
         # 创建一个新的布局容器用于放置游戏按钮网格
         self.scroll_area = QScrollArea()
@@ -1309,7 +1311,15 @@ class GameSelector(QWidget):
 
     def refresh_games(self):
         """刷新游戏列表，处理 extra_paths 中的快捷方式"""
-        subprocess.Popen("QuickStreamAppAdd.exe", shell=True)
+        process = subprocess.Popen("QuickStreamAppAdd.exe", shell=True)
+        process.wait()  # 等待程序执行完成
+        self.confirm_dialog = ConfirmDialog("是否要重启程序以应用更改？")
+        result = self.confirm_dialog.exec_()  # 显示弹窗并获取结果
+        self.ignore_input_until = pygame.time.get_ticks() + 350  # 设置屏蔽时间为800毫秒
+        if not result == QDialog.Accepted:  
+            return
+        else:
+            self.restart_program()
         return
         if not self.is_admin():
             print("需要管理员权限才能刷新游戏列表。尝试获取管理员权限...")
