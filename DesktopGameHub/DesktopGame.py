@@ -1047,7 +1047,6 @@ class GameSelector(QWidget):
                                 self.ignore_input_until = pygame.time.get_ticks() + 500
                                 hwnd = int(self.winId())
                                 #win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                                time.sleep(0.5)
                                 #self.showFullScreen()
                                 ## 记录当前窗口的 Z 顺序
                                 #z_order = []
@@ -1395,54 +1394,56 @@ class GameControllerThread(QThread):
                 color: #FFFFFF;
                 margin-bottom: 40px;
                 text-align: center;
+                background: transparent;  /* 设置文字背景透明 */
             }
         """)
-        
+
         # 设置悬浮窗大小为父窗口大小
         self.parent.launch_overlay.setFixedSize(self.parent.size())
-        
+
         # 创建垂直布局
         self.overlay_layout = QVBoxLayout(self.parent.launch_overlay)
         self.overlay_layout.setAlignment(Qt.AlignCenter)
-        
+
         # 创建图片标签和文本标签
         self.overlay_image = QLabel()
         self.overlay_image.setAlignment(Qt.AlignCenter)
         self.overlay_layout.addWidget(self.overlay_image)
-        
+
         self.overlay_text = QLabel()
         self.overlay_text.setAlignment(Qt.AlignCenter)
         self.overlay_layout.addWidget(self.overlay_text)
-        
+
         # 初始时隐藏
         self.parent.launch_overlay.hide()
 
     def show_launch_window(self, game_name, image_path):
         """显示启动游戏的悬浮窗"""
-        
+
         # 将悬浮窗置于最上层并显示
         self.parent.launch_overlay.raise_()
         self.parent.launch_overlay.show()
+
         # 更新图片
         if image_path:
             pixmap = QPixmap(image_path).scaled(
-                int(400 * self.parent.scale_factor), 
-                int(533 * self.parent.scale_factor), 
-                Qt.KeepAspectRatio, 
+                int(400 * self.parent.scale_factor),
+                int(533 * self.parent.scale_factor),
+                Qt.KeepAspectRatio,
                 Qt.SmoothTransformation
             )
             self.overlay_image.setPixmap(pixmap)
             self.overlay_image.show()
         else:
             self.overlay_image.hide()
-        
+
         # 更新文本
         self.overlay_text.setText(f"正在启动 {game_name}")
-        
+
         # 将悬浮窗置于最上层并显示
         self.parent.launch_overlay.raise_()
         self.parent.launch_overlay.show()
-        
+
         # 5秒后自动隐藏
         QTimer.singleShot(5000, self.parent.launch_overlay.hide)
 
