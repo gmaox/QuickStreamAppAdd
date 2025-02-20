@@ -17,7 +17,22 @@ from icoextract import IconExtractor, IconExtractorError
 from PIL import Image, ImageDraw
 from colorthief import ColorThief
 from io import BytesIO
-
+import ctypes
+import time,pyautogui
+from ctypes import wintypes
+# 定义 Windows API 函数
+SetWindowPos = ctypes.windll.user32.SetWindowPos
+SetForegroundWindow = ctypes.windll.user32.SetForegroundWindow
+FindWindow = ctypes.windll.user32.FindWindowW
+# 定义常量
+HWND_TOPMOST = -1
+SWP_NOMOVE = 0x0002
+SWP_NOSIZE = 0x0001
+# 定义 SetWindowPos 函数的参数类型和返回类型
+SetWindowPos.restype = wintypes.BOOL
+SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+SetForegroundWindow.restype = wintypes.BOOL
+SetForegroundWindow.argtypes = [wintypes.HWND]
 # 读取 JSON 数据
 json_path = r"C:\Program Files\Sunshine\config\apps.json"
 with open(json_path, "r", encoding="utf-8") as f:
@@ -26,7 +41,10 @@ with open(json_path, "r", encoding="utf-8") as f:
     for idx, entry in enumerate(data["apps"]):
         entry["name"] = re.sub(r'^\d{2} ', '', entry["name"])  # 去掉开头的两位数字和空格
 
-
+if ctypes.windll.shell32.IsUserAnAdmin()==0:
+    ADMIN = False
+elif ctypes.windll.shell32.IsUserAnAdmin()==1:
+    ADMIN = True
 # 筛选具有 "output_image" or "igdb" 路径的条目
 games = [
     app for app in data["apps"]
@@ -204,7 +222,7 @@ for app in data.get("apps", []):
         if cmd.lower().endswith('.lnk'):
             try:
                 target_path = get_target_path(cmd)
-                valid_apps.append({"name": app["name"], "path": target_path})
+                valid_apps.append({"name": app["name"], "path": target_path})#os.path.splitext(file_name)[0]；file_name = os.path.basename(full_path)
             except Exception as e:
                 print(f"无法解析快捷方式 {cmd}：{e}")
         # 如果cmd是.exe文件路径
@@ -950,6 +968,9 @@ class GameSelector(QWidget):
         sorted_games = self.sort_games()
         game = sorted_games[index]
         game_cmd = game["cmd"]
+        game_name = game["name"]
+        image_path = game.get("image-path", "")
+
         if game["name"] in self.player:
             for app in valid_apps:
                 if app["name"] == game["name"]:
@@ -988,7 +1009,8 @@ class GameSelector(QWidget):
                 return
             else:
                 pass
-
+        self.controller_thread.show_launch_window(game_name, image_path)
+        self.current_index = 0  # 从第一个按钮开始
         # 更新最近游玩列表
         if game["name"] in settings["last_played"]:
             settings["last_played"].remove(game["name"])
@@ -998,14 +1020,12 @@ class GameSelector(QWidget):
             json.dump(settings, f, indent=4)
 
         self.reload_interface()
-
         if game_cmd:
-            self.showMinimized()
+            #self.showMinimized()
             subprocess.Popen(game_cmd, shell=True)
-            time.sleep(1)
             #self.showFullScreen()
             self.ignore_input_until = pygame.time.get_ticks() + 1000
-
+    
     def handle_gamepad_input(self, action):
         """处理手柄输入"""
         # 跟踪焦点状态
@@ -1020,8 +1040,39 @@ class GameSelector(QWidget):
             with focus_lock:  #焦点检查-只有打包后才能使用
                 if not focus: 
                     if action == 'GUIDE':
-                        self.showFullScreen()
-                        self.last_input_time = current_time
+                        if ADMIN:
+                            try:
+                                if current_time < ((self.ignore_input_until)+2000):
+                                    return
+                                self.ignore_input_until = pygame.time.get_ticks() + 500
+                                hwnd = int(self.winId())
+                                #win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                                time.sleep(0.5)
+                                #self.showFullScreen()
+                                ## 记录当前窗口的 Z 顺序
+                                #z_order = []
+                                #def enum_windows_callback(hwnd, lParam):
+                                #    z_order.append(hwnd)
+                                #    return True
+                                #win32gui.EnumWindows(enum_windows_callback, None)
+
+                                SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
+                                time.sleep(0.2)
+                                screen_width, screen_height = pyautogui.size()
+                                pyautogui.FAILSAFE = False
+                                # 设置右下角坐标
+                                right_bottom_x = screen_width - 1  # 最右边
+                                right_bottom_y = screen_height - 1  # 最底部
+                                # 移动鼠标到屏幕右下角并进行右键点击
+                                pyautogui.rightClick(right_bottom_x, right_bottom_y)
+                                # 恢复原来的 Z 顺序
+                                #for hwnd in reversed(z_order):
+                                SetWindowPos(hwnd, -2, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
+                            except Exception as e:
+                                print(f"Error: {e}")
+                        else:
+                            self.showFullScreen()
+                            self.last_input_time = current_time
                     return
         
         if self.in_floating_window and self.floating_window:
@@ -1133,7 +1184,6 @@ class GameSelector(QWidget):
                         print(f"找到进程: {proc.info['name']} (PID: {proc.info['pid']})")
                         proc.terminate()  # 结束进程
                         proc.wait()  # 等待进程完全终止
-                        print(f"进程 {proc.info['name']} (PID: {proc.info['pid']}) 已终止.")
                         return
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     # 处理权限问题和进程已消失的异常
@@ -1326,8 +1376,75 @@ class GameControllerThread(QThread):
         self.move_delay = 0.1
         self.axis_threshold = 0.5
         self.last_hat_time = 0
-        self.hat_delay = 0.05  # 将 hat 事件的防抖延迟减小到 50 毫秒
+        self.hat_delay = 0.05
         self.last_hat_value = (0, 0)
+        
+        # 预创建 launch_overlay
+        self.create_launch_overlay()
+
+    def create_launch_overlay(self):
+        """预创建启动游戏的悬浮窗"""
+        self.parent.launch_overlay = QWidget(self.parent)
+        self.parent.launch_overlay.setObjectName("launchOverlay")
+        self.parent.launch_overlay.setStyleSheet("""
+            QWidget#launchOverlay {
+                background-color: rgba(46, 46, 46, 0.9);
+            }
+            QLabel {
+                font-size: 36px;
+                color: #FFFFFF;
+                margin-bottom: 40px;
+                text-align: center;
+            }
+        """)
+        
+        # 设置悬浮窗大小为父窗口大小
+        self.parent.launch_overlay.setFixedSize(self.parent.size())
+        
+        # 创建垂直布局
+        self.overlay_layout = QVBoxLayout(self.parent.launch_overlay)
+        self.overlay_layout.setAlignment(Qt.AlignCenter)
+        
+        # 创建图片标签和文本标签
+        self.overlay_image = QLabel()
+        self.overlay_image.setAlignment(Qt.AlignCenter)
+        self.overlay_layout.addWidget(self.overlay_image)
+        
+        self.overlay_text = QLabel()
+        self.overlay_text.setAlignment(Qt.AlignCenter)
+        self.overlay_layout.addWidget(self.overlay_text)
+        
+        # 初始时隐藏
+        self.parent.launch_overlay.hide()
+
+    def show_launch_window(self, game_name, image_path):
+        """显示启动游戏的悬浮窗"""
+        
+        # 将悬浮窗置于最上层并显示
+        self.parent.launch_overlay.raise_()
+        self.parent.launch_overlay.show()
+        # 更新图片
+        if image_path:
+            pixmap = QPixmap(image_path).scaled(
+                int(400 * self.parent.scale_factor), 
+                int(533 * self.parent.scale_factor), 
+                Qt.KeepAspectRatio, 
+                Qt.SmoothTransformation
+            )
+            self.overlay_image.setPixmap(pixmap)
+            self.overlay_image.show()
+        else:
+            self.overlay_image.hide()
+        
+        # 更新文本
+        self.overlay_text.setText(f"正在启动 {game_name}")
+        
+        # 将悬浮窗置于最上层并显示
+        self.parent.launch_overlay.raise_()
+        self.parent.launch_overlay.show()
+        
+        # 5秒后自动隐藏
+        QTimer.singleShot(5000, self.parent.launch_overlay.hide)
 
     def run(self):
         """监听手柄输入"""
@@ -2470,6 +2587,12 @@ class SettingsWindow(QWidget):
 # 应用程序入口
 if __name__ == "__main__":
     # 获取程序所在目录
+    z_order = []
+    def enum_windows_callback(hwnd, lParam):
+        z_order.append(hwnd)
+        return True
+    win32gui.EnumWindows(enum_windows_callback, None)
+    print(z_order)
     if getattr(sys, 'frozen', False):
         # 如果是打包后的可执行文件
         program_directory = os.path.dirname(sys.executable)
