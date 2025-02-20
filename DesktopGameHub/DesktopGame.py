@@ -645,7 +645,7 @@ class GameSelector(QWidget):
         # 创建一个新的布局容器用于放置游戏按钮网格
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setFixedHeight(int(self.height() * 0.9))  # 设置高度为90%
+        self.scroll_area.setFixedHeight(int(self.height() * 0.9))  # 设置高度为90% int(320 * self.scale_factor)
         self.scroll_area.setFixedWidth(int(self.width()))  # 设置宽度为100%
         self.scroll_area.setAttribute(Qt.WA_AcceptTouchEvents)  #滚动支持
 
@@ -1241,29 +1241,34 @@ class GameSelector(QWidget):
         self.in_floating_window = True
         self.floating_window.update_highlight()
         
-    def execute_more_item(self):
+    def execute_more_item(self, file=None):
         """执行更多选项中的项目"""
+        if file:
+            current_file = file
+        else:
+            current_file = sorted_files[self.floating_window.current_index]
+        current_file["path"] = os.path.abspath(os.path.join("./bat/", current_file["path"]))
         if not self.floating_window:
             return
-            
+
         sorted_files = self.floating_window.sort_files()
-        current_file = sorted_files[self.floating_window.current_index]
-        
+
         # 更新最近使用列表
         if "more_last_used" not in settings:
             settings["more_last_used"] = []
-            
+
         if current_file["name"] in settings["more_last_used"]:
             settings["more_last_used"].remove(current_file["name"])
         settings["more_last_used"].insert(0, current_file["name"])
-        
+
         # 保存设置
         with open(settings_path, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=4)
-        
+
         # 执行文件
-        subprocess.Popen(current_file["path"], shell=True)
-        self.exitdef()
+        subprocess.Popen(current_file["path"])
+        self.floating_window.hide()
+        self.in_floating_window = False
 
     def can_toggle_window(self):
         """检查是否可以切换悬浮窗状态"""
@@ -1311,8 +1316,7 @@ class GameSelector(QWidget):
 
     def refresh_games(self):
         """刷新游戏列表，处理 extra_paths 中的快捷方式"""
-        process = subprocess.Popen("QuickStreamAppAdd.exe", shell=True)
-        process.wait()  # 等待程序执行完成
+        subprocess.Popen("QuickStreamAppAdd.exe", shell=True)
         self.confirm_dialog = ConfirmDialog("是否要重启程序以应用更改？")
         result = self.confirm_dialog.exec_()  # 显示弹窗并获取结果
         self.ignore_input_until = pygame.time.get_ticks() + 350  # 设置屏蔽时间为800毫秒
@@ -1694,9 +1698,10 @@ class FloatingWindow(QWidget):
             """)
             if file["name"] in settings.get("more_favorites", []):
                 btn.setText(f"⭐ {file['name']}")
-            
+
             self.buttons.append(btn)
             self.layout.addWidget(btn)
+            btn.clicked.connect(lambda checked, f=file: self.parent().execute_more_item(f))
 
         if settitype:
             # 重新添加按钮到布局
@@ -1776,6 +1781,7 @@ class FloatingWindow(QWidget):
                 border: {int(1 * self.parent().scale_factor)}px solid #444444;
                 border-radius: {int(10 * self.parent().scale_factor)}px;
                 padding: {int(10 * self.parent().scale_factor)}px;
+                font-size: {int(20 * self.parent().scale_factor)}px;
             }}
         """)
         layout.addWidget(self.name_edit)
