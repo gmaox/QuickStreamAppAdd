@@ -4,7 +4,7 @@ import threading
 import pygame
 import configparser
 import win32gui,win32process,psutil
-from PyQt5.QtWidgets import QApplication, QVBoxLayout, QDialog, QGridLayout, QWidget, QPushButton, QLabel, QDesktopWidget, QHBoxLayout, QFileDialog, QSlider, QTextEdit, QProgressBar, QScrollArea, QFrame
+from PyQt5.QtWidgets import QApplication, QSystemTrayIcon, QVBoxLayout, QDialog, QGridLayout, QWidget, QPushButton, QLabel, QDesktopWidget, QHBoxLayout, QFileDialog, QSlider, QTextEdit, QProgressBar, QScrollArea, QFrame
 from PyQt5.QtGui import QPixmap, QIcon
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 import subprocess
@@ -50,6 +50,17 @@ games = [
     app for app in data["apps"]
     if "output_image" in app.get("image-path", "") or "igdb" in app.get("image-path", "") or "steam/appcache/librarycache/" in app.get("image-path", "")
 ]
+if getattr(sys, 'frozen', False):
+    # 如果是打包后的可执行文件
+    program_directory = os.path.dirname(sys.executable)
+    getattrs = True
+else:
+    # 如果是脚本运行
+    program_directory = os.path.dirname(os.path.abspath(__file__))
+    getattrs = False
+
+# 将工作目录更改为上一级目录
+os.chdir(program_directory)
 
 # 读取设置文件
 settings_path = "set.json"
@@ -363,7 +374,7 @@ class ConfirmDialog(QDialog):
         """)
 
         self.init_ui()
-        self.current_index = 0  # 当前选中的按钮索引
+        self.current_index = 1  # 当前选中的按钮索引
         self.buttons = [self.cancel_button, self.confirm_button]  # 按钮列表
         self.last_input_time = 0  # 最后一次处理输入的时间
         self.input_delay = 300  # 去抖延迟时间，单位：毫秒
@@ -501,6 +512,8 @@ class GameSelector(QWidget):
         self.setFocus()
         self.activateWindow()
         self.raise_()
+        if STARTUP:
+            self.showMinimized()
 
         self.ignore_input_until = 0  # 添加变量以记录输入屏蔽的时间戳
         # 游戏索引和布局
@@ -714,6 +727,17 @@ class GameSelector(QWidget):
 
         # 将设置按钮添加到左侧布局
         self.left_layout.addWidget(self.settings_button)
+        
+        if STARTUP:
+            # 设置窗口标志，使其不在任务栏显示
+            self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
+            # 重新显示窗口以应用新的窗口标志
+            self.show()
+            # 立即隐藏窗口
+            self.hide()
+            # 延迟一小段时间以确保窗口完全初始化
+            QTimer.singleShot(100, self.hide)
+
 
     def handle_reload_signal(self):
         """处理信号时的逻辑"""
@@ -1049,7 +1073,11 @@ class GameSelector(QWidget):
                                     return
                                 self.ignore_input_until = pygame.time.get_ticks() + 500
                                 hwnd = int(self.winId())
-                                #win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                                if STARTUP:
+                                    QApplication.quit()
+                                    # 无参数重启
+                                    subprocess.Popen([sys.executable])
+
                                 #self.showFullScreen()
                                 ## 记录当前窗口的 Z 顺序
                                 #z_order = []
@@ -1613,6 +1641,28 @@ class GameControllerThread(QThread):
                 time.sleep(0.01)
             except Exception as e:
                 print(f"Error in event loop: {e}")
+                self.restart_thread()
+
+    def restart_thread(self):
+        """重启线程"""
+        try:
+            # 关闭所有现有的控制器
+            for controller_data in self.controllers.values():
+                controller_data['controller'].quit()
+            self.controllers.clear()
+            
+            # 重新初始化 pygame
+            pygame.quit()
+            pygame.init()
+            
+            # 重置计时器和状态
+            self.last_move_time = 0
+            self.last_hat_time = 0
+            self.last_hat_value = (0, 0)
+            
+            print("手柄监听线程已重启")
+        except Exception as e:
+            print(f"重启线程时发生错误: {e}")
 
 class FloatingWindow(QWidget):
     def __init__(self, parent=None):
@@ -2405,8 +2455,7 @@ class SettingsWindow(QWidget):
         self.killexplorer_button.clicked.connect(self.toggle_killexplorer)
         self.layout.addWidget(self.killexplorer_button)
 
-        # 添加打开快捷方式文件夹按钮
-        self.open_folder_button = QPushButton("打开目标文件夹")
+        self.open_folder_button = QPushButton("开启/关闭-开机自启")
         self.open_folder_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: #444444;
@@ -2420,8 +2469,8 @@ class SettingsWindow(QWidget):
                 background-color: #555555;
             }}
         """)
-        self.open_folder_button.clicked.connect(self.open_shortcut_folder)
-        #self.layout.addWidget(self.open_folder_button)
+        self.open_folder_button.clicked.connect(self.is_startup_enabled)
+        self.layout.addWidget(self.open_folder_button)
 
         # 添加新增快捷方式按钮
         self.add_shortcut_button = QPushButton("新增快捷方式到首文件夹")
@@ -2454,6 +2503,32 @@ class SettingsWindow(QWidget):
         self.paths_layout = QVBoxLayout(self.paths_frame)
         self.layout.addWidget(self.paths_frame)
 
+    # 检查程序是否设置为开机自启
+    def is_startup_enabled(self):
+        command = ['schtasks', '/query', '/tn', "DesktopGameStartup"]
+        try:
+            # 如果任务存在，将返回0
+            subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            return self.set_startup_enabled(enable=False)
+        except subprocess.CalledProcessError:
+            return self.set_startup_enabled(enable=True)
+    
+    # 设置程序开机自启
+    def set_startup_enabled(self,enable):
+        if enable:
+            app_path = sys.executable
+            command = [
+                'schtasks', '/create', '/tn', "DesktopGameStartup", '/tr', f'"{app_path}" startup',
+                '/sc', 'onlogon', '/rl', 'highest', '/f'
+            ]
+            subprocess.run(command, check=True)
+        else:
+            try:
+                command = ['schtasks', '/delete', '/tn', "DesktopGameStartup", '/f']
+                subprocess.run(command, check=True)
+            except FileNotFoundError:
+                pass
+            
     def toggle_killexplorer(self):
         """切换 killexplorer 状态并保存设置"""
         settings["killexplorer"] = not settings.get("killexplorer", False)
@@ -2611,28 +2686,18 @@ if __name__ == "__main__":
         return True
     win32gui.EnumWindows(enum_windows_callback, None)
     print(z_order)
-    if getattr(sys, 'frozen', False):
-        # 如果是打包后的可执行文件
-        program_directory = os.path.dirname(sys.executable)
-        getattrs = True
-    else:
-        # 如果是脚本运行
-        program_directory = os.path.dirname(os.path.abspath(__file__))
-        getattrs = False
-    
-    # 将工作目录更改为上一级目录
-    os.chdir(program_directory)
     
     # 打印当前工作目录
     print("当前工作目录:", os.getcwd())
+    unique_args = list(dict.fromkeys(sys.argv))
+    if len(unique_args) > 1 and unique_args[1] == "startup":
+        STARTUP = True
+        print("77777777777777777")
+    else:
+        STARTUP = False
     app = QApplication(sys.argv)
     selector = GameSelector()
     selector.show()
     # 去除重复的路径
-    unique_args = list(dict.fromkeys(sys.argv))
-
-    # 检查启动参数，如果包含 'refresh'，则立即执行刷新逻辑
-    if len(unique_args) > 1 and unique_args[1] == "refresh":
-        selector.refresh_games()
 
     sys.exit(app.exec_())
