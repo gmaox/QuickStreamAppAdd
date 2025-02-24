@@ -20,6 +20,7 @@ from io import BytesIO
 import ctypes
 import time,pyautogui
 from ctypes import wintypes
+#PyInstaller --add-data "fav.ico;." DesktopGame.py -i '.\fav.ico' --uac-admin --noconsole
 # 定义 Windows API 函数
 SetWindowPos = ctypes.windll.user32.SetWindowPos
 SetForegroundWindow = ctypes.windll.user32.SetForegroundWindow
@@ -504,7 +505,7 @@ class GameSelector(QWidget):
         self.setWindowFlags(Qt.FramelessWindowHint)  # 全屏无边框
         self.setStyleSheet("background-color: #1e1e1e;")  # 设置深灰背景色
         self.killexplorer = settings.get("killexplorer", False)
-        if self.killexplorer == True:
+        if self.killexplorer == True and STARTUP == False:
             subprocess.run(["taskkill", "/f", "/im", "explorer.exe"])
         self.showFullScreen()
         # 确保窗口捕获焦点
@@ -1189,7 +1190,11 @@ class GameSelector(QWidget):
     def exitdef(self):
         if self.killexplorer == True:
             subprocess.run(["start", "explorer.exe"], shell=True)
-        self.close()
+        #self.close()
+        # 退出后隐藏窗口
+        QApplication.quit()
+        subprocess.Popen([sys.executable, "startup"])
+
     def toggle_favorite(self):
         """切换当前游戏的收藏状态"""
         current_game = self.sort_games()[self.current_index]
@@ -2503,6 +2508,24 @@ class SettingsWindow(QWidget):
         self.paths_layout = QVBoxLayout(self.paths_frame)
         self.layout.addWidget(self.paths_frame)
 
+        # 在其他按钮之后添加关闭程序按钮
+        self.close_program_button = QPushButton("关闭程序")
+        self.close_program_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: BLACK; 
+                color: white;
+                text-align: center;
+                padding: {int(10 * parent.scale_factor)}px;
+                border: none;
+                font-size: {int(16 * parent.scale_factor)}px;
+            }}
+            QPushButton:hover {{
+                background-color: #ff6666;
+            }}
+        """)
+        self.close_program_button.clicked.connect(self.close_program)
+        self.layout.addWidget(self.close_program_button)
+
     # 检查程序是否设置为开机自启
     def is_startup_enabled(self):
         command = ['schtasks', '/query', '/tn', "DesktopGameStartup"]
@@ -2675,6 +2698,15 @@ class SettingsWindow(QWidget):
         # 只传递可执行文件的路径，不传递其他参数
         subprocess.Popen([sys.executable])
 
+    def close_program(self):
+        """完全关闭程序"""
+        self.close_program_button.setText("正在退出程序...")
+        self.close_program_button.setEnabled(False)  # 禁用按钮以防止重复点击
+        # 如果开启了沉浸模式，需要恢复explorer
+        if self.parent().killexplorer:
+            subprocess.run(["start", "explorer.exe"], shell=True)
+        # 退出程序
+        QTimer.singleShot(500, QApplication.quit)
 
 
 # 应用程序入口
