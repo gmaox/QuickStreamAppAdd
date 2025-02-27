@@ -46,10 +46,10 @@ if ctypes.windll.shell32.IsUserAnAdmin()==0:
     ADMIN = False
 elif ctypes.windll.shell32.IsUserAnAdmin()==1:
     ADMIN = True
-# 筛选具有 "output_image" or "igdb" 路径的条目
+# 筛选具有标签路径的条目
 games = [
     app for app in data["apps"]
-    if "output_image" in app.get("image-path", "") or "igdb" in app.get("image-path", "") or "steam/appcache/librarycache/" in app.get("image-path", "")
+    if "output_image" in app.get("image-path", "") or "SGDB" in app.get("image-path", "") or "igdb" in app.get("image-path", "") or "steam/appcache/librarycache/" in app.get("image-path", "")
 ]
 if getattr(sys, 'frozen', False):
     # 如果是打包后的可执行文件
