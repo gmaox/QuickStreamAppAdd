@@ -917,10 +917,6 @@ class GameSelector(QWidget):
                 # 使用QPoint实现精确定位并改进调整滚动的方式
                 button_pos = QPoint(current_button.mapToGlobal(QPoint(0, 0)))  # 获取当前按钮的精确位置
                 scroll_value = self.scroll_area.horizontalScrollBar().value()  # 获取当前滚动值
-                
-                # 计算移动距离
-                print(button_pos.x(), button_width, scroll_area_width)
-                
                 # 当靠近左边缘且移动距离大于3时调整滚动
                 if button_pos.x() < scroll_area_pos.x():
                     second_button_pos = self.buttons[0].mapToGlobal(QPoint(0, 0)).x()
@@ -932,6 +928,29 @@ class GameSelector(QWidget):
                     second_button_pos = self.buttons[min(3, len(self.buttons) - 1)].mapToGlobal(QPoint(0, 0)).x()
                     scroll_value = button_pos.x() - second_button_pos
                     self.scroll_area.horizontalScrollBar().setValue(scroll_value)
+                    print(button_pos.x())
+                    asdffasf=button_pos.x()
+        #
+        #self.game_name_label.move(button_pos.x(), button_pos.y() - self.game_name_label.height())
+        #self.game_name_label.show()
+        # 新增文本显示，复制game_name_label的内容
+        button_pos = current_button.mapToGlobal(QPoint(0, 0))  # 重新加载按钮的最新位置
+        if hasattr(self, 'additional_game_name_label'):
+            self.additional_game_name_label.deleteLater()  # 删除之前生成的additional_game_name_label
+        else:
+            QTimer.singleShot(200, self.update_highlight)  # 延迟200毫秒后调用update_highlight
+        self.additional_game_name_label = QLabel(self.game_name_label.text(), self)
+        self.additional_game_name_label.setAlignment(Qt.AlignCenter)  # 设置文本居中
+        self.additional_game_name_label.setStyleSheet(f"""
+            QLabel {{
+                color: white;
+                font-size: {int(20 * self.scale_factor*1.5)}px;
+            }}
+        """)
+        self.additional_game_name_label.adjustSize()  # 调整标签大小以适应文本
+        print(self.game_name_label.text(), button_pos.x(), button_pos.x() + (button_width - self.additional_game_name_label.width()) // 2, button_pos.y() - self.game_name_label.height() - 20)
+        self.additional_game_name_label.move(button_pos.x() + (button_width - self.additional_game_name_label.width()) // 2, button_pos.y() - self.game_name_label.height() - 20)  # 居中在按钮中央
+        self.additional_game_name_label.show()
         #    current_button = self.buttons[self.current_index]
         #    scroll_area_width = self.scroll_area.viewport().width()
         #    button_pos = current_button.mapTo(self.scroll_widget, QPoint(0, 0))
