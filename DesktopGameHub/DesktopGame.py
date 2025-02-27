@@ -2555,7 +2555,7 @@ class SettingsWindow(QWidget):
     def toggle_killexplorer(self):
         """切换 killexplorer 状态并保存设置"""
         settings["killexplorer"] = not settings.get("killexplorer", False)
-        self.killexplorer_button.setText(f"沉浸模式: {'开启' if settings['killexplorer'] else '关闭'}")
+        self.killexplorer_button.setText(f"沉浸模式: {'√' if settings['killexplorer'] else '×'}")
         
         # 保存设置
         with open(settings_path, "w", encoding="utf-8") as f:
