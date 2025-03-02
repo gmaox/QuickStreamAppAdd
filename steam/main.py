@@ -29,7 +29,7 @@ def get_app_install_path():
         print(f"Error: {e}")
     return print(f"未检测到安装目录！")
 APP_INSTALL_PATH=get_app_install_path()
-print(f"安装目录: {APP_INSTALL_PATH}，该应用会改变安装目录下\config\apps.json文件")
+print(f"安装目录: {APP_INSTALL_PATH}，该应用会改变安装目录下\\config\\apps.json文件")
 def get_steam_base_dir():
     """
     获取Steam的安装目录
