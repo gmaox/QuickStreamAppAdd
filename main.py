@@ -11,12 +11,14 @@ from io import BytesIO
 import requests
 import tkinter as tk
 from tkinter import filedialog
-import sys
+import sys, urllib3
 import threading  # 导入 threading 模块
 import configparser  # 导入 configparser 模块
 import shutil  # 导入 shutil 模块
 import re  # 导入正则表达式模块
 import pythoncom
+#PyInstaller main.py -i fav.ico --uac-admin
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning) #禁用SSL警告
 # 在文件开头添加全局变量
 hidden_files = []
 config = configparser.ConfigParser()
