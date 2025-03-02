@@ -2,8 +2,33 @@ import winreg
 import os
 import re
 import json
+import urllib3
 import requests  # 添加requests库
-
+# PyInstaller -F main.py -i fav.ico --uac-admin
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning) #禁用SSL警告
+print("v25.03.02")
+def get_app_install_path():
+    app_name = "sunshine"
+    try:
+        # 打开注册表键，定位到安装路径信息
+        registry_key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, 
+                                      r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")
+        # 遍历注册表中的子项，查找对应应用名称
+        for i in range(winreg.QueryInfoKey(registry_key)[0]):
+            subkey_name = winreg.EnumKey(registry_key, i)
+            subkey = winreg.OpenKey(registry_key, subkey_name)
+            try:
+                display_name, _ = winreg.QueryValueEx(subkey, "DisplayName")
+                if app_name.lower() in display_name.lower():
+                    install_location, _ = winreg.QueryValueEx(subkey, "DisplayIcon")
+                    if os.path.exists(install_location):
+                        return os.path.dirname(install_location)
+            except FileNotFoundError:
+                continue
+    except Exception as e:
+        print(f"Error: {e}")
+    return print(f"未检测到安装目录！")
+APP_INSTALL_PATH=get_app_install_path()
 def get_steam_base_dir():
     """
     获取Steam的安装目录
@@ -54,17 +79,17 @@ def generate_app_entry(app_id, steam_base_dir):
     entry = {
         "name": f"steamgame {app_id}", 
         "output": "",
-        "detached": [f"steam://rungameid/{app_id}"],
+        "cmd": f"steam://rungameid/{app_id}",
         "exclude-global-prep-cmd": "false",
         "elevated": "false",
         "auto-detach": "true",
         "wait-all": "true",
         "exit-timeout": "5",
         "menu-cmd": "",
-        "image-path": image_path
+        "image-path": image_path,
+        "working-dir": f"steam steam://rungameid/{app_id}"
     }
     return entry
-#,"working-dir": f"steam steam://rungameid/{app_id}"
 
 def update_apps_json(apps_json_path, steam_base_dir, all_app_ids):
     """
@@ -104,7 +129,7 @@ def restart_service():
         else:
             print(f"sunshine服务重启")
     except requests.exceptions.RequestException as e:
-        print(f"sunshine服务重启")
+        print(f"sunshine服务已重启")
 
 if __name__ == "__main__":
     steam_base_dir = get_steam_base_dir()
@@ -121,7 +146,7 @@ if __name__ == "__main__":
                     print(f"  - {app_id}")
                 all_app_ids.extend(app_ids)
             # 更新apps.json文件
-            update_apps_json(r"C:\Program Files\Sunshine\config\apps.json", steam_base_dir, all_app_ids)
+            update_apps_json(f"{APP_INSTALL_PATH}\\config\\apps.json", steam_base_dir, all_app_ids)
             # 更新完成后重启服务
             restart_service()
         else:
