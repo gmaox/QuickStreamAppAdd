@@ -29,6 +29,7 @@ def get_app_install_path():
         print(f"Error: {e}")
     return print(f"未检测到安装目录！")
 APP_INSTALL_PATH=get_app_install_path()
+print(f"安装目录: {APP_INSTALL_PATH}，该应用会改变安装目录下\config\apps.json文件")
 def get_steam_base_dir():
     """
     获取Steam的安装目录
@@ -79,15 +80,15 @@ def generate_app_entry(app_id, steam_base_dir):
     entry = {
         "name": f"steamgame {app_id}", 
         "output": "",
-        "cmd": f"steam://rungameid/{app_id}",
+        "detached": [f"steam://rungameid/{app_id}"],
         "exclude-global-prep-cmd": "false",
         "elevated": "false",
         "auto-detach": "true",
         "wait-all": "true",
         "exit-timeout": "5",
         "menu-cmd": "",
-        "image-path": image_path,
-        "working-dir": f"steam steam://rungameid/{app_id}"
+        "image-path": image_path
+
     }
     return entry
 
