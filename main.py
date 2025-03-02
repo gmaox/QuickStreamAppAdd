@@ -17,7 +17,8 @@ import configparser  # 导入 configparser 模块
 import shutil  # 导入 shutil 模块
 import re  # 导入正则表达式模块
 import pythoncom
-#PyInstaller main.py -i fav.ico --uac-admin
+#PyInstaller main.py -i fav.ico --uac-admin --noconsole --onefile
+#PyInstaller main.py -i fav.ico --uac-admin --noconsole
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning) #禁用SSL警告
 # 在文件开头添加全局变量
 hidden_files = []
