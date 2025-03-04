@@ -21,10 +21,17 @@
   <summary>QuickStreamAppAdd之外的东西</summary>
   <p>
   ps：其实可以试试雷游，体验更完善<p>
+    
+  pss：这个启动器我今年可能无心完善，所以放个下载链接供体验：[蓝奏云下载链接](https://wwse.lanzoup.com/i1Ttk2pkvr8j) 密码:81su（遇到问题可直接在本issue中提
 
-  我的一个游戏启动器：<p>
+  我的自制游戏启动器：<p>
   
-![屏幕截图 2024-12-30 233436](https://github.com/user-attachments/assets/45b8ee75-e565-4dbf-8c9d-999ec28048a0)
+<!-- ![屏幕截图 2024-12-30 233436](https://github.com/user-attachments/assets/45b8ee75-e565-4dbf-8c9d-999ec28048a0) -->
+
+
+https://github.com/user-attachments/assets/d2b6d54d-dddf-40b1-a04b-074df70ee1cf
+
+
 
 该前端的优势：
 <p>1.依托qt5的自适应布局，界面布局简单舒适
