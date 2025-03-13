@@ -71,8 +71,15 @@ https://github.com/user-attachments/assets/d2b6d54d-dddf-40b1-a04b-074df70ee1cf
 
 3.改变触屏进入游戏逻辑（单击变为移动焦点，不确定更改是否合适，低优先级
 
+4.加入按键das和arr改善手感
+
 0.仿switch锁屏页面，左侧显示天气信息（低优先级
 
 -1.动画效果（低优先级
+
+未来界面可能的构造（底下俩图是现在的布局：
+![1000173840](https://github.com/user-attachments/assets/935b78c1-00a6-4af0-9afe-8031f2b90ae2)
+
+
 
 </details>
