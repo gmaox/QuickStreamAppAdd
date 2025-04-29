@@ -17,8 +17,13 @@ import configparser  # 导入 configparser 模块
 import shutil  # 导入 shutil 模块
 import re  # 导入正则表达式模块
 import pythoncom
-#PyInstaller main.py -i fav.ico --uac-admin --noconsole --onefile
+import win32api
+import win32con
+import win32security
+import win32process
 #PyInstaller main.py -i fav.ico --uac-admin --noconsole
+#将两个程序使用PyInstaller打包后，将quick_add.exe和其文件夹粘贴到该main所生成的程序目录中（相同文件可跳过
+#312 INFO: PyInstaller: 6.6.0, contrib hooks: 2024.4 Python: 3.8.5 Platform: Windows-10-10.0.22621-SP0
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning) #禁用SSL警告
 # 在文件开头添加全局变量
 hidden_files = []
@@ -203,8 +208,18 @@ def create_gui():
             folder_entry.config(state=tk.DISABLED)  # 选择后再设置为不可编辑
 
     # 文件夹选择按钮
-    folder_button = tk.Button(folder_frame, text="选择文件夹", command=select_directory)
+    folder_button = tk.Button(folder_frame, text="指定文件夹", command=select_directory)
     folder_button.pack(padx=(10, 0), side=tk.LEFT)  # 上边距为0，左对齐
+
+    def open_folder():
+        if os.path.exists(folder_selected):
+            os.startfile(folder_selected)
+        else:
+            print(f"文件夹不存在: {folder_selected}")
+
+    # 文件夹打开按钮
+    folder_button = tk.Button(folder_frame, text="📂", command=open_folder)
+    folder_button.pack(padx=(0, 0), side=tk.LEFT)  # 上边距为0，左对齐
 
     def open_sun_apps():
         import webbrowser
@@ -212,7 +227,7 @@ def create_gui():
 
     # 打开sunapp管理按钮
     apps_button = tk.Button(folder_frame, text="应用管理",bg='#FFA500',command=open_sun_apps)
-    apps_button.pack(padx=(10, 0), side=tk.LEFT)  # 上边距为0，左对齐
+    apps_button.pack(padx=(0, 0), side=tk.LEFT)  # 上边距为0，左对齐
 
     # 创建文本框用来显示程序输出
     text_box = tk.Text(root, wrap=tk.WORD, height=15, bg='#333333', fg='white')
@@ -457,6 +472,11 @@ def create_gui():
                     trimmed = display_name.ljust(max_name_len)
                 
                 listbox.insert(tk.END, f"{trimmed}{status_suffix}")
+            # 清空文本框并运行main()
+            text_box.delete('1.0', tk.END)
+            global onestart
+            onestart = True
+            main()
 
         c_button = tk.Button(fold_frame, text="--显示/隐藏--", width=25, bg='#aaaaaa', command=toggle_hidden)
         c_button.pack(side=tk.LEFT, padx=5)  # 使用 side=tk.LEFT 使按钮在同一行
@@ -468,36 +488,104 @@ def create_gui():
     button1 = tk.Button(root, text="编辑排除\n快捷方式项目", width=11, height=2, bg='#aaaaaa', fg='white', command=edit_excluded_shortcuts_window)
     button1.pack(side=tk.RIGHT, padx=0, pady=(3, 3))
 
-    def edit_excluded_shortcuts():
-        """编辑排除的快捷方式项目"""
+    def edit_excluded_shortcuts(): 
         global folder
         if not folder:
             print("没有可用的目标文件夹")
             return
 
-        # 弹出文件选择框
-        selected_file = filedialog.askopenfilename(
-            title="  选择一个exe可执行文件，生成快捷方式到目录文件夹",
-            filetypes=[("Executable Files", "*.exe")]
-        )
-        
-        if selected_file:
-            shortcut_name = os.path.splitext(os.path.basename(selected_file))[0] + ".lnk"
-            shortcut_path = os.path.join(folder, shortcut_name)
-
-            # 如果是lnk文件，直接复制
-            if selected_file.endswith('.lnk'):
-                shutil.copy(selected_file, shortcut_path)
+        try:
+            if getattr(sys, 'frozen', False):
+                current_dir = os.path.dirname(sys.executable)
             else:
-                # 创建新的快捷方式
-                shell = win32com.client.Dispatch("WScript.Shell")
-                shortcut = shell.CreateShortCut(shortcut_path)
-                shortcut.TargetPath = selected_file
-                shortcut.WorkingDirectory = os.path.dirname(selected_file)
-                shortcut.save()
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+
+            quick_add_path = os.path.join(current_dir, "quick_add.exe")
             
-            print(f"快捷方式已创建: {shortcut_path}")
-    
+            if not os.path.exists(quick_add_path):
+                print(f"错误：未找到quick_add.exe，请确保它与主程序在同一目录下")
+                return
+
+            # 获取当前用户的令牌
+            token = win32security.OpenProcessToken(
+                win32api.GetCurrentProcess(),
+                win32con.TOKEN_QUERY | win32con.TOKEN_DUPLICATE | win32con.TOKEN_ASSIGN_PRIMARY
+            )
+            
+            # 创建新的令牌
+            new_token = win32security.DuplicateTokenEx(
+                token,
+                win32security.SecurityImpersonation,
+                win32con.TOKEN_ALL_ACCESS,
+                win32security.TokenPrimary
+            )
+            
+            # 创建中等完整性级别的SID
+            medium_sid = win32security.CreateWellKnownSid(win32security.WinMediumLabelSid, None)
+            
+            # 设置令牌的权限级别
+            win32security.SetTokenInformation(
+                new_token,
+                win32security.TokenIntegrityLevel,
+                (medium_sid, 0)  # 使用正确的SID格式
+            )
+            
+            # 创建进程
+            startup_info = win32process.STARTUPINFO()
+            startup_info.dwFlags = win32con.STARTF_USESHOWWINDOW
+            startup_info.wShowWindow = win32con.SW_NORMAL
+            
+            process_info = win32process.CreateProcessAsUser(
+                new_token,
+                None,  # 应用程序名
+                f'"{quick_add_path}" "{folder}"',  # 命令行
+                None,  # 进程安全属性
+                None,  # 线程安全属性
+                False,  # 不继承句柄
+                win32con.NORMAL_PRIORITY_CLASS,  # 创建标志
+                None,  # 新环境
+                None,  # 当前目录
+                startup_info
+            )
+            
+            # 获取进程ID
+            pid = process_info[2]
+            
+            # 关闭不需要的句柄
+            win32api.CloseHandle(process_info[1])  # 线程句柄
+            win32api.CloseHandle(new_token)
+            win32api.CloseHandle(token)
+            
+            # 等待进程结束
+            while True:
+                try:
+                    # 尝试打开进程
+                    process_handle = win32api.OpenProcess(win32con.PROCESS_QUERY_INFORMATION, False, pid)
+                    if process_handle:
+                        # 获取退出码
+                        exit_code = win32process.GetExitCodeProcess(process_handle)
+                        if exit_code != win32con.STILL_ACTIVE:
+                            # 进程已结束
+                            win32api.CloseHandle(process_handle)
+                            break
+                        win32api.CloseHandle(process_handle)
+                except:
+                    # 进程已结束
+                    break
+                time.sleep(0.1)  # 避免CPU占用过高
+            
+            # 关闭进程句柄
+            win32api.CloseHandle(process_info[0])
+            
+            text_box.delete('1.0', tk.END)
+            # 运行main()
+            global onestart
+            onestart = True
+            main()
+            
+        except Exception as e:
+            print(f"运行quick_add.exe时出错: {e}")
+
     button2 = tk.Button(root, text="快速\n添加", width=6, height=2, bg='#aaaaaa', fg='white') 
     button2.pack(side=tk.RIGHT, padx=1, pady=(3, 3))
     button2.config(command=edit_excluded_shortcuts)
