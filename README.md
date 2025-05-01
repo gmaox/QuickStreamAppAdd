@@ -21,8 +21,6 @@
   <summary>QuickStreamAppAdd之外的东西</summary>
   <p>
   ps：其实可以试试雷游，体验更完善<p>
-    
-  pss：这个启动器我今年可能无心完善，所以放个下载链接供体验：[蓝奏云下载链接](https://wwse.lanzoup.com/i1Ttk2pkvr8j) 密码:81su（遇到问题可直接在本issue中提
 
   我的自制游戏启动器：<p>
   
