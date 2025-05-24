@@ -357,7 +357,7 @@ def create_gui():
             listbox.insert(tk.END, item)
 
         # 定义选择事件处理函数
-        def on_select():
+        def on_select(event=None):
             selected_indices = listbox.curselection()  # 获取选中的索引
             if selected_indices:
                 if " -- 已转换过" in display_items[selected_indices[0]]:
@@ -377,6 +377,7 @@ def create_gui():
                 steam_cover_window.destroy()
             else:
                 print("请选中一项再转换")
+        listbox.bind('<Double-Button-1>', on_select)  # 双击
 
         # 创建一个框架用于放置按钮
         fold_frame = tk.Frame(steam_cover_window)
@@ -584,6 +585,10 @@ def create_gui():
             global onestart
             onestart = True
             main()
+            # 将主窗口置于前台
+            root.lift()
+            root.attributes('-topmost', True)
+            root.after(500, lambda: root.attributes('-topmost', False))
             
         except Exception as e:
             print(f"运行quick_add.exe时出错: {e}")
@@ -591,10 +596,47 @@ def create_gui():
     button2 = tk.Button(root, text="快速\n添加", width=6, height=2, bg='#aaaaaa', fg='white') 
     button2.pack(side=tk.RIGHT, padx=0, pady=(3, 3))
     button2.config(command=edit_excluded_shortcuts)
+    def sgdboop_select():
+        # 1. 读取 apps.json
+        apps_json_path = f"{APP_INSTALL_PATH}\\config\\apps.json"
+        apps_json = load_apps_json(apps_json_path)
+        app_names = [entry["name"] for entry in apps_json.get("apps", [])]
+    
+        # 2. 弹出选择窗口
+        select_win = tk.Toplevel()
+        select_win.title("选择游戏以在SGDB搜索")
+        select_win.geometry("360x250")
+    
+        label = tk.Label(select_win, text="请选择一个游戏名称：")
+        label.pack(pady=10)
+    
+        listbox = tk.Listbox(select_win, height=4)
+        for name in app_names:
+            listbox.insert(tk.END, name)
+        listbox.pack(pady=0, padx=15, fill=tk.BOTH, expand=True)
+        def open_sgdb(event=None):
+            sel = listbox.curselection()
+            if not sel:
+                return
+            game_name = listbox.get(sel[0])
+            url = f"https://www.steamgriddb.com/search/grids?term={game_name}"
+            webbrowser.open(url)
+            select_win.destroy()
+        listbox.bind('<Double-Button-1>', open_sgdb)  # 双击
 
-    button2 = tk.Button(root, text="打开\nSGDB", width=6, height=2, bg='#aaaaaa', fg='white') 
+        # 创建一个框架用于放置按钮
+        fold_frame = tk.Frame(select_win)
+        fold_frame.pack(padx=10, pady=(10, 0))
+
+        btn = tk.Button(fold_frame, text="在SGDB中搜索", width=25, bg='#aaaaaa', command=open_sgdb)
+        btn.pack(side=tk.LEFT, padx=5)
+    
+        close_btn = tk.Button(fold_frame, text="关闭", width=20, bg='#aaaaaa', command=select_win.destroy)
+        close_btn.pack(side=tk.LEFT)
+    button2 = tk.Button(root, text="搜索于\nSGDB", width=6, height=2, bg='#aaaaaa', fg='white') 
     button2.pack(side=tk.RIGHT, padx=0, pady=(3, 3))
-    button2.config(command=lambda: webbrowser.open("https://www.steamgriddb.com/"))
+    button2.config(command=sgdboop_select)
+    #button2.config(command=lambda: webbrowser.open("https://www.steamgriddb.com/"))
     # 重定向 stdout 和 stderr 到文本框
     redirector = RedirectPrint(text_box)
     sys.stdout = redirector  # 重定向标准输出
