@@ -2,6 +2,7 @@ import os
 import time
 import glob
 import json
+import webbrowser
 import winreg
 import win32com.client  # 用于解析 .lnk 文件
 from icoextract import IconExtractor, IconExtractorError
@@ -71,7 +72,8 @@ def get_app_install_path():
                 continue
     except Exception as e:
         print(f"Error: {e}")
-    return print(f"未检测到安装目录！")
+    print(f"未检测到安装目录！")
+    return os.path.dirname(sys.executable)
 APP_INSTALL_PATH=get_app_install_path()
 
 def load_apps_json(json_path):
@@ -277,7 +279,7 @@ def create_gui():
     start_button.pack(side=tk.RIGHT, padx=(0,10), pady=3)  # 右侧对齐
 
     # 删除所有 output_image 条目的按钮
-    delete_button = tk.Button(root, text="删除所有\n生成的sun应用", command=delete_output_images, width=15, height=2, bg='#aaaaaa', fg='white')  # 设置背景色为黑色，文字颜色为白色
+    delete_button = tk.Button(root, text="删除生成的\nsunshine应用", command=delete_output_images, width=10, height=2, bg='#aaaaaa', fg='white')  # 设置背景色为黑色，文字颜色为白色
     delete_button.pack(side=tk.RIGHT, padx=0, pady=(3, 3))  # 上边距为0，下边距为10
 
     # 在创建 GUI 时，添加转换 steam 封面按钮
@@ -391,7 +393,7 @@ def create_gui():
         label = tk.Label(steam_cover_window, text="开源地址：https://github.com/gmaox/QuickStreamAppAdd")
         label.pack(pady=5)  # 确保调用 pack() 方法将标签添加到窗口中
 
-    steam_cover_button = tk.Button(root, text="转换已生成\nsteam快捷方式封面", command=open_steam_cover_window, width=15, height=2, bg='#aaaaaa', fg='white')  # 设置背景色为黑色，文字颜色为白色
+    steam_cover_button = tk.Button(root, text="转换已生成\nsteam游戏封面", command=open_steam_cover_window, width=13, height=2, bg='#aaaaaa', fg='white')  # 设置背景色为黑色，文字颜色为白色
     steam_cover_button.pack(side=tk.RIGHT, padx=0, pady=(3, 3))  # 上边距为0，下边距为10
 
     # 添加两个新按钮
@@ -587,9 +589,12 @@ def create_gui():
             print(f"运行quick_add.exe时出错: {e}")
 
     button2 = tk.Button(root, text="快速\n添加", width=6, height=2, bg='#aaaaaa', fg='white') 
-    button2.pack(side=tk.RIGHT, padx=1, pady=(3, 3))
+    button2.pack(side=tk.RIGHT, padx=0, pady=(3, 3))
     button2.config(command=edit_excluded_shortcuts)
 
+    button2 = tk.Button(root, text="打开\nSGDB", width=6, height=2, bg='#aaaaaa', fg='white') 
+    button2.pack(side=tk.RIGHT, padx=0, pady=(3, 3))
+    button2.config(command=lambda: webbrowser.open("https://www.steamgriddb.com/"))
     # 重定向 stdout 和 stderr 到文本框
     redirector = RedirectPrint(text_box)
     sys.stdout = redirector  # 重定向标准输出
