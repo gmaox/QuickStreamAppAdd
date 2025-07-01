@@ -15,7 +15,8 @@
 <p>操作演示：http://b23.tv/6dh80eP
 <p>相关开源项目
 <p>-将playnite游戏导入到sunshine：https://github.com/MichaelMKenny/SunshineAppExport
-  <p>从某网站快速导入封面：https://github.com/gmaox/SGDBoopForSunshine
+<p>-致谢Python-steamgriddb：https://github.com/ZebcoWeb/python-steamgriddb/tree/main
+<!--在py3.8中安装并使用C:/Users/86150/AppData/Local/Programs/Python/Python38/python.exe -m pip install -U git+https://github.com/ZebcoWeb/python-steamgriddb.git-->
 <hr>
 <details>
   <summary>QuickStreamAppAdd之外的东西</summary>
