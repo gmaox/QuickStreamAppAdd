@@ -2,6 +2,7 @@ import os
 import time
 import glob
 import json
+from tkinter import messagebox
 import webbrowser
 import winreg
 import win32com.client  # 用于解析 .lnk 文件
@@ -22,12 +23,14 @@ import win32api
 import win32con
 import win32security
 import win32process
+import vdf
 #PyInstaller main.py -i fav.ico --uac-admin --noconsole
 #将两个程序使用PyInstaller打包后，将quick_add.exe和其文件夹粘贴到该main所生成的程序目录中（相同文件可跳过
 #312 INFO: PyInstaller: 6.6.0, contrib hooks: 2024.4 Python: 3.8.5 Platform: Windows-10-10.0.22621-SP0
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning) #禁用SSL警告
 # 在文件开头添加全局变量
 hidden_files = []
+steam_excluded_games = []  # 新增：steam 屏蔽游戏 appid 列表
 config = configparser.ConfigParser()
 if getattr(sys, 'frozen', False):
     # 如果是打包后的应用程序
@@ -92,32 +95,46 @@ def save_apps_json(apps_json, file_path):
 
 def load_config():
     """加载配置文件"""
-    global close_after_completion, pseudo_sorting_enabled, hidden_files ,folder
+    global close_after_completion, pseudo_sorting_enabled, hidden_files ,folder, steam_excluded_games
     config.read(config_file_path)
     folder = config.get('Settings', 'folder_selected', fallback='')
     hidden_files_str = config.get('Settings', 'hidden_files', fallback='')  # 获取隐藏的文件路径字符串
     hidden_files = hidden_files_str.split(',') if hidden_files_str else []  # 将字符串转换为列表
     close_after_completion = config.getboolean('Settings', 'close_after_completion', fallback=True)  # 获取关闭选项
     pseudo_sorting_enabled = config.getboolean('Settings', 'pseudo_sorting_enabled', fallback=False)  # 获取伪排序选项
+    # 新增 steam_excluded_games
+    steam_excluded_games_str = config.get('Settings', 'steam_excluded_games', fallback='')
+    steam_excluded_games = steam_excluded_games_str.split(',') if steam_excluded_games_str else []
     if os.path.exists(config_file_path)==False:
         save_config()  #没有配置文件保存下
     # 检查 folder 是否有效
     if not os.path.isdir(folder):
-        print(f"无效的目录: {folder}，将使用默认目录。")
-        folder = os.path.realpath(os.path.join(os.path.expanduser("~"), "Desktop")).replace("\\", "/")  # 设置为默认桌面目录
+        
+        # 弹窗提示
+        messagebox.showinfo(
+            "首次启动QSAA - 关于工作路径",
+            "这似乎是你第一次启动QSAA，请了解工作路径是什么\n\n该程序会扫描工作路径的快捷方式，加入到Sunshine中\n程序默认工作路径为：程序同级路径\\appfolder\n游戏添加方法：快速添加按钮/主页添加steam游戏/手动拖入文件夹\n工作目录可在主页中修改\ntip：若选择桌面目录，主页的排除功能是很有用的（排除非游戏快捷方式）",
+            icon="question"
+        )
+        folder = os.path.realpath(os.path.join(os.path.dirname(sys.executable), "appfolder")).replace("\\", "/")
+        if not os.path.exists(folder):
+            os.makedirs(folder)  # 创建目录
+        #folder = os.path.realpath(os.path.join(os.path.expanduser("~"), "Desktop")).replace("\\", "/") + "\n\n选择"是"使用程序目录，选择"否"使用桌面目录（之后可随时修改）"
         save_config()
     return folder
 
 def save_config():
     """保存选择的目录到配置文件"""
     try:
-        global hidden_files, folder, close_after_completion, pseudo_sorting_enabled  # 添加全局变量声明
+        global hidden_files, folder, close_after_completion, pseudo_sorting_enabled, steam_excluded_games  # 添加全局变量声明
         config['Settings'] = {
             'folder_selected': folder,
             'close_after_completion': close_after_completion,
             'pseudo_sorting_enabled': pseudo_sorting_enabled,
             # 将 hidden_files 列表转换为逗号分隔的字符串
-            'hidden_files': ','.join(hidden_files) if hidden_files else ''
+            'hidden_files': ','.join(hidden_files) if hidden_files else '',
+            # 新增 steam_excluded_games
+            'steam_excluded_games': ','.join(steam_excluded_games) if steam_excluded_games else ''
         }
         with open(config_file_path, 'w') as configfile:
             config.write(configfile)
@@ -176,13 +193,19 @@ def generate_steamapp(app_id):
 # 创建Tkinter窗口
 def create_gui():
     global folder_selected, close_after_completion, hidden_files
-    folder_selected = load_config()  # 加载配置文件中的目录
     # 确保 folder_selected 是有效的目录
-    if not os.path.isdir(folder_selected):
-        folder_selected = os.path.realpath(os.path.join(os.path.expanduser("~"), "Desktop")).replace("\\", "/")  # 设置为默认桌面目录
     root = tk.Tk()
     root.title("QuickStreamAppAdd")
     root.geometry("700x400")
+    #width, height = 700, 400
+    #x = (root.winfo_screenwidth() // 2) - (width // 2)
+    #y = (root.winfo_screenheight() // 2) - (height // 2)
+    #root.geometry(f"{width}x{height}+{x}+{y}")
+    folder_selected = load_config()  # 加载配置文件中的目录
+    if not os.path.isdir(folder_selected):
+        messagebox.showerror("错误", f"目录不存在，程序退出")
+        root.destroy()
+        return
 
     # 创建一个框架用于放置文件夹选择文本框和按钮
     folder_frame = tk.Frame(root)
@@ -221,6 +244,21 @@ def create_gui():
 
     # 文件夹打开按钮
     folder_button = tk.Button(folder_frame, text="📂", command=open_folder)
+    folder_button.pack(padx=(0, 0), side=tk.LEFT)  # 上边距为0，左对齐
+
+    def runonestart():
+        text_box.delete('1.0', tk.END)
+        # 运行main()
+        global onestart
+        onestart = True
+        main()
+        # 将主窗口置于前台
+        root.lift()
+        root.attributes('-topmost', True)
+        root.after(500, lambda: root.attributes('-topmost', False))
+
+    # 刷新按钮
+    folder_button = tk.Button(folder_frame, text="↻", command=runonestart)
     folder_button.pack(padx=(0, 0), side=tk.LEFT)  # 上边距为0，左对齐
 
     def open_sun_apps():
@@ -282,119 +320,151 @@ def create_gui():
     delete_button = tk.Button(root, text="删除生成的\nsunshine应用", command=delete_output_images, width=10, height=2, bg='#aaaaaa', fg='white')  # 设置背景色为黑色，文字颜色为白色
     delete_button.pack(side=tk.RIGHT, padx=0, pady=(3, 3))  # 上边距为0，下边距为10
 
-    # 在创建 GUI 时，添加转换 steam 封面按钮
-    def open_steam_cover_window():
-        """打开转换 steam 封面的新窗口"""
-        steam_cover_window = tk.Toplevel()  # 创建一个新的顶级窗口
-        steam_cover_window.title("转换 Steam 封面")
-        steam_cover_window.geometry("360x250")  # 设置窗口大小
-
-        # 在新窗口中添加内容，例如标签和按钮
-        label = tk.Label(steam_cover_window, text="选择一个已导入的steam项目，使图标封面转变为游戏海报\n（转换后视作独立应用，QSAA不进行处理，删除请前往sunshine）")
+    def add_steamgame_window():
+        """打开新窗口，自动读取本地Steam已安装游戏，选择后生成.url快捷方式"""
+        steam_base_dir = get_steam_base_dir()
+        if not steam_base_dir:
+            tk.messagebox.showerror("错误", "未检测到Steam安装目录！")
+            return
+        # 1. 读取所有Steam库路径
+        libraryfolders_path = os.path.join(steam_base_dir, 'steamapps', 'libraryfolders.vdf')
+        try:
+            with open(libraryfolders_path, encoding='utf-8') as f:
+                vdf_data = vdf.load(f)
+        except Exception as e:
+            tk.messagebox.showerror("错误", f"无法读取libraryfolders.vdf: {e}")
+            return
+        # 兼容新版/旧版VDF结构
+        if 'libraryfolders' in vdf_data:
+            folders = vdf_data['libraryfolders']
+        else:
+            folders = vdf_data['LibraryFolders']
+        library_paths = []
+        for k, v in folders.items():
+            if isinstance(v, dict) and 'path' in v:
+                library_paths.append(v['path'])
+            elif isinstance(v, str) and v.isdigit() == False:
+                library_paths.append(v)
+        if steam_base_dir not in library_paths:
+            library_paths.append(steam_base_dir)
+        # 2. 遍历所有库，收集所有appmanifest_*.acf
+        games = []
+        for lib in library_paths:
+            steamapps = os.path.join(lib, 'steamapps')
+            if not os.path.exists(steamapps):
+                continue
+            for file in os.listdir(steamapps):
+                if file.startswith('appmanifest_') and file.endswith('.acf'):
+                    try:
+                        with open(os.path.join(steamapps, file), encoding='utf-8') as f:
+                            acf = vdf.load(f)
+                        appid = acf['AppState']['appid']
+                        name = acf['AppState']['name']
+                        games.append({'appid': appid, 'name': name})
+                    except Exception as e:
+                        continue
+        # 3. 创建窗口和Listbox
+        steam_cover_window = tk.Toplevel()
+        steam_cover_window.title("添加 Steam 游戏")
+        steam_cover_window.geometry("360x400")
+        label = tk.Label(steam_cover_window, text="选择一个本地Steam游戏，快速添加到sunshine应用中")
         label.pack(pady=10)
-
-        apps_json_path = f"{APP_INSTALL_PATH}\\config\\apps.json"  # 修改为你的 apps.json 文件路径
-        apps_json = load_apps_json(apps_json_path)  # 加载现有的 apps.json 文件
-        apps_json_save = json.loads(json.dumps(apps_json)) # 序列化和反序列化解除嵌套
-        # 只保留 detached 有效的条目
-        apps_json['apps'] = [
-            entry for entry in apps_json['apps'] 
-            if entry.get("detached")  # 确保 detached 字段存在且有效
-        ]
-
-        # 汇集所有的 detached 字段到 items
-        items = []
-        for entry in apps_json['apps']:
-            if isinstance(entry.get("detached"), list):  # 确保 detached 是一个列表
-                items.extend(entry["detached"])  # 将所有的 detached 项添加到 items 列表中
-        items = [item.strip('"') for item in items]
-        # 检查每个文件是否包含 steam://rungameid/ 字段
-        valid_items = []
-        steam_urls = []  # 用于存储有效的 steam URL
-        for item in items:
-            try:
-                # 检查文件扩展名
-                if item.lower().endswith('.url'):
-                    # 读取 .url 文件
-                    with open(item, 'r', encoding='utf-8') as f:
-                        content = f.readlines()
-                        for line in content:
-                            if line.startswith("URL="):  # 检查是否以 URL= 开头
-                                url = line.split("=", 1)[1].strip()  # 获取 URL
-                                if "steam://rungameid/" in url:  # 检查是否包含该字段
-                                    valid_items.append(item)  # 如果包含，则保留该项
-                                    steam_urls.append(re.findall(r'\d+', url))  # 存储有效的steamid
-                                    break  # 找到后可以跳出循环
-                else:
-                    # 只读打开其他文件
-                    with open(item, 'r', encoding='utf-8') as f:
-                        content = f.read()  # 读取文件内容
-                        if "steam://rungameid/" in content:  # 检查是否包含该字段
-                            valid_items.append(item)  # 如果包含，则保留该项
-            except Exception as e:
-                print(f"无法读取文件 {item}: {e}")  # 处理文件读取异常
-
-        items = valid_items  # 更新 items 列表为有效项
-
-        # 创建 display_items 变量，将 items 中的项目转变为无后缀文件名形式
-        display_items = [os.path.splitext(os.path.basename(item))[0] for item in items]  # 去掉文件后缀
-        non_items = []
-        for app in apps_json['apps']:
-            # 如果'app'中包含'key'为'image-path'，并且该路径包含'_library_600x900'子字符串
-            if 'image-path' in app and '_library_600x900' in app['image-path']:
-                non_items.append(os.path.splitext(os.path.basename(app['detached'][0]))[0])
-        for i in range(len(display_items)):
-            # 判断当前项是否在 non_items 中
-            if display_items[i] in non_items:
-                # 如果存在，修改 display_items 中的该项
-                display_items[i] += " -- 已转换过"
-        # 创建 Listbox 组件
-        listbox = tk.Listbox(steam_cover_window, height=4) 
+        
+        # 过滤被屏蔽的游戏
+        visible_games = [g for g in games if g['appid'] not in steam_excluded_games]
+        listbox = tk.Listbox(steam_cover_window, height=12)
         listbox.pack(pady=0, padx=15, fill=tk.BOTH, expand=True)
-
-        # 将 display_items 中的内容添加到 Listbox
-        for item in display_items:
-            listbox.insert(tk.END, item)
-
-        # 定义选择事件处理函数
+        for g in visible_games:
+            listbox.insert(tk.END, g['name'])
+        # 选择并生成.url快捷方式
         def on_select(event=None):
-            selected_indices = listbox.curselection()  # 获取选中的索引
-            if selected_indices:
-                if " -- 已转换过" in display_items[selected_indices[0]]:
-                    print("这个已经转换过了")
-                    return  # 如果包含，直接返回
-                selected_items = items[selected_indices[0]]  # 获取选中的项
-                print(f"尝试转换: {selected_items} id：{int(steam_urls[selected_indices[0]][0])}") 
-                steamimage = generate_steamapp(int(steam_urls[selected_indices[0]][0]))
-                print(steamimage)
-                for app in apps_json_save['apps']:
-                    # 如果 'detached' 是一个列表，并且它有至少一个元素
-                    if 'detached' in app and len(app['detached']) > 0 and app['detached'][0].strip('"') == selected_items:
-                        app['image-path'] = steamimage
-                        print("替换成功")
-                        break
-                save_apps_json(apps_json_save, apps_json_path)
-                steam_cover_window.destroy()
-            else:
-                print("请选中一项再转换")
-        listbox.bind('<Double-Button-1>', on_select)  # 双击
+            sel = listbox.curselection()
+            if not sel:
+                return
+            game = visible_games[sel[0]]
+            appid = game['appid']
+            # 替换不能作为文件名的特殊符号为''
+            safe_name = re.sub(r'[\\/:*?"<>|]', '', game['name'])
+            shortcut_name = f"{safe_name}.url"
+            shortcut_path = os.path.join(folder_selected, shortcut_name)
+            icon_path = os.path.join(steam_base_dir, 'steam.exe')
+            url_content = f"[InternetShortcut]\nURL=steam://rungameid/{appid}\nIconFile={icon_path}\nIconIndex=0\n"
+            with open(shortcut_path, 'w', encoding='utf-8') as f:
+                f.write(url_content)
+            tk.messagebox.showinfo("成功", f"已在 {folder_selected} 创建快捷方式: {shortcut_name}")
+            steam_cover_window.destroy()
+            runonestart()
+        listbox.bind('<Double-Button-1>', on_select)
 
-        # 创建一个框架用于放置按钮
+        # 新增：屏蔽部分steam游戏按钮
+        def edit_steam_excluded_games():
+            global steam_excluded_games
+            exclude_win = tk.Toplevel(steam_cover_window)
+            exclude_win.title("屏蔽/取消屏蔽 Steam 游戏")
+            exclude_win.geometry("360x800")
+            tk.Label(exclude_win, text="多选屏蔽/取消屏蔽，保存后立即生效").pack(pady=10)
+            lb = tk.Listbox(exclude_win, selectmode=tk.MULTIPLE, height=15)
+            lb.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
+            # 全部游戏列表，带屏蔽标记
+            for g in games:
+                suffix = " --已屏蔽" if g['appid'] in steam_excluded_games else ""
+                lb.insert(tk.END, g['name'] + suffix)
+            # 预选已屏蔽项
+            for idx, g in enumerate(games):
+                if g['appid'] in steam_excluded_games:
+                    lb.selection_set(idx)
+            def save_exclude():
+                global steam_excluded_games
+                selected = lb.curselection()
+                new_excluded = [games[idx]['appid'] for idx in selected]
+                steam_excluded_games = new_excluded
+                save_config()
+                exclude_win.destroy()
+                # 刷新主列表
+                steam_cover_window.destroy()
+                add_steamgame_window()
+            btn_frame = tk.Frame(exclude_win)
+            btn_frame.pack(pady=10)
+            def select_all():
+                lb.select_set(0, tk.END)
+            select_all_btn = tk.Button(btn_frame, text="全选", command=select_all, width=10, bg='#aaaaaa')
+            select_all_btn.pack(side=tk.LEFT, padx=5)
+            btn = tk.Button(btn_frame, text="保存", command=save_exclude, width=15, bg='#aaaaaa')
+            btn.pack(side=tk.LEFT, padx=5)        # 新增：导入全部游戏按钮
+        def import_all_games():
+            # 读取已存在的快捷方式名（不含扩展名）
+            existing_files = set(os.path.splitext(f)[0] for f in os.listdir(folder_selected) if f.endswith('.url'))
+            count = 0
+            for g in visible_games:
+                safe_name = re.sub(r'[\\/:*?"<>|]', '', g['name'])
+                if safe_name in existing_files:
+                    continue  # 已存在
+                shortcut_name = f"{safe_name}.url"
+                shortcut_path = os.path.join(folder_selected, shortcut_name)
+                icon_path = os.path.join(steam_base_dir, 'steam.exe')
+                url_content = f"[InternetShortcut]\nURL=steam://rungameid/{g['appid']}\nIconFile={icon_path}\nIconIndex=0\n"
+                with open(shortcut_path, 'w', encoding='utf-8') as f:
+                    f.write(url_content)
+                count += 1
+            tk.messagebox.showinfo("批量导入", f"已导入 {count} 个新游戏快捷方式！")
+            steam_cover_window.destroy()
+            runonestart()
         fold_frame = tk.Frame(steam_cover_window)
         fold_frame.pack(padx=10, pady=(10, 0))
-
-        # 创建两个按钮并放置在同一行
-        c_button = tk.Button(fold_frame, text="--转换--", width=25, bg='#aaaaaa', command=on_select)
-        c_button.pack(side=tk.LEFT, padx=5)  # 使用 side=tk.LEFT 使按钮在同一行
-
-        close_button = tk.Button(fold_frame, text="关闭转换窗口", width=20, bg='#aaaaaa', command=steam_cover_window.destroy)
-        close_button.pack(side=tk.LEFT)  # 使用 side=tk.LEFT 使按钮在同一行
-
-        # 添加开源地址标签
+        c_button = tk.Button(fold_frame, text="--添加--", width=25, bg='#aaaaaa', command=on_select)
+        c_button.pack(side=tk.LEFT, padx=5)
+        close_button = tk.Button(fold_frame, text="关闭窗口", width=20, bg='#aaaaaa', command=steam_cover_window.destroy)
+        close_button.pack(side=tk.LEFT)
+        btn_row = tk.Frame(steam_cover_window)
+        btn_row.pack(padx=10, pady=(10, 0))
+        exclude_btn = tk.Button(btn_row, text="屏蔽部分steam游戏", command=edit_steam_excluded_games, width=25, bg='#aaaaaa')
+        exclude_btn.pack(side=tk.LEFT, padx=5)
+        import_btn = tk.Button(btn_row, text="导入全部游戏", command=import_all_games, width=20, bg='#aaaaaa')
+        import_btn.pack(side=tk.LEFT)
         label = tk.Label(steam_cover_window, text="开源地址：https://github.com/gmaox/QuickStreamAppAdd")
-        label.pack(pady=5)  # 确保调用 pack() 方法将标签添加到窗口中
+        label.pack(pady=5)
 
-    steam_cover_button = tk.Button(root, text="转换已生成\nsteam游戏封面", command=open_steam_cover_window, width=13, height=2, bg='#aaaaaa', fg='white')  # 设置背景色为黑色，文字颜色为白色
+    steam_cover_button = tk.Button(root, text="从本地steam库\n加入游戏", command=add_steamgame_window, width=13, height=2, bg='#aaaaaa', fg='white')  # 设置背景色为黑色，文字颜色为白色
     steam_cover_button.pack(side=tk.RIGHT, padx=0, pady=(3, 3))  # 上边距为0，下边距为10
 
     # 添加两个新按钮
@@ -579,16 +649,7 @@ def create_gui():
             
             # 关闭进程句柄
             win32api.CloseHandle(process_info[0])
-            
-            text_box.delete('1.0', tk.END)
-            # 运行main()
-            global onestart
-            onestart = True
-            main()
-            # 将主窗口置于前台
-            root.lift()
-            root.attributes('-topmost', True)
-            root.after(500, lambda: root.attributes('-topmost', False))
+            runonestart()
             
         except Exception as e:
             print(f"运行quick_add.exe时出错: {e}")
@@ -614,26 +675,45 @@ def create_gui():
         for name in app_names:
             listbox.insert(tk.END, name)
         listbox.pack(pady=0, padx=15, fill=tk.BOTH, expand=True)
-        def open_sgdb(event=None):
+
+        def on_select(event=None):
             sel = listbox.curselection()
             if not sel:
                 return
             game_name = listbox.get(sel[0])
-            url = f"https://www.steamgriddb.com/search/grids?term={game_name}"
-            webbrowser.open(url)
-            select_win.destroy()
-        listbox.bind('<Double-Button-1>', open_sgdb)  # 双击
-
-        # 创建一个框架用于放置按钮
+            # 找到对应app_entry
+            app_entry = None
+            for entry in apps_json.get("apps", []):
+                if entry["name"] == game_name:
+                    app_entry = entry
+                    break
+            if app_entry:
+                # 统一调用choose_cover_with_sgdb
+                covers_dir = os.path.join(APP_INSTALL_PATH, "config", "covers")
+                os.makedirs(covers_dir, exist_ok=True)
+                appid = app_entry.get("appid") or app_entry.get("id") or app_entry.get("name")
+                filename = os.path.join(covers_dir, f"{appid}_SGDB.jpg")
+                exe_path = None
+                # 尝试获取可执行路径
+                if app_entry.get("cmd"):
+                    exe_path = app_entry["cmd"].strip('"')
+                elif app_entry.get("detached") and len(app_entry["detached"]) > 0:
+                    exe_path = app_entry["detached"][0].strip('"')
+                select_win.destroy()
+                choose_cover_with_sgdb(game_name, filename, exe_path)
+                # 如果选择了封面，更新 apps.json
+                if os.path.exists(filename):
+                    app_entry["image-path"] = filename.replace("\\", "/")
+                    save_apps_json(apps_json, apps_json_path)
+        listbox.bind('<Double-Button-1>', on_select)
         fold_frame = tk.Frame(select_win)
         fold_frame.pack(padx=10, pady=(10, 0))
-
-        btn = tk.Button(fold_frame, text="在SGDB中搜索", width=25, bg='#aaaaaa', command=open_sgdb)
+        btn = tk.Button(fold_frame, text="选择并更换SGDB封面", width=25, bg='#aaaaaa', command=on_select)
         btn.pack(side=tk.LEFT, padx=5)
     
         close_btn = tk.Button(fold_frame, text="关闭", width=20, bg='#aaaaaa', command=select_win.destroy)
         close_btn.pack(side=tk.LEFT)
-    button2 = tk.Button(root, text="搜索于\nSGDB", width=6, height=2, bg='#aaaaaa', fg='white') 
+    button2 = tk.Button(root, text="SGDB\n封面查找", width=6, height=2, bg='#aaaaaa', fg='white') 
     button2.pack(side=tk.RIGHT, padx=0, pady=(3, 3))
     button2.config(command=sgdboop_select)
     #button2.config(command=lambda: webbrowser.open("https://www.steamgriddb.com/"))
@@ -641,7 +721,7 @@ def create_gui():
     redirector = RedirectPrint(text_box)
     sys.stdout = redirector  # 重定向标准输出
     sys.stderr = redirector  # 重定向错误输出
-    main()
+    threading.Thread(target=main).start()
     root.mainloop()
 
 def get_lnk_files(include_hidden=False):
@@ -802,17 +882,23 @@ def add_entries_to_apps_json(valid_lnk_files, apps_json, modified_target_paths,i
             continue  # 跳过已有条目的处理
         matching_image_entry = next((item for item in image_target_paths if item[0] == lnk_file), None)
         app_entry = generate_app_entry(lnk_file, matching_image_entry[1])
-        if app_entry:  # 仅在 app_entry 不为 None 时添加
+        if app_entry:  # 仅在 app_entry 不为 None时添加
             apps_json["apps"].append(app_entry)
             print(f"新加入: {lnk_file}")
 
 def remove_entries_with_output_image(apps_json, base_names):
-    # 删除 apps.json 中包含 "output_image" 的条目，且 cmd 和 detached 字段不在 base_names 中
+    # 删除 apps.json 中包含 "output_image" 或"_SGDB"或"_library_600x900"的条目，且 cmd 和 detached 字段不在 base_names 中
     apps_json['apps'] = [
         entry for entry in apps_json['apps'] 
-        if "output_image" not in entry.get("image-path", "") or 
-           (entry.get("cmd") and os.path.basename(entry["cmd"].strip('"')) in base_names) or 
-           (entry.get("detached") and any(os.path.basename(detached_item.strip('"')) in base_names for detached_item in entry["detached"]))
+        if not (
+            ("output_image" in entry.get("image-path", "") or
+             "_SGDB" in entry.get("image-path", "") or
+             "_library_600x900" in entry.get("image-path", ""))
+            and not (
+                (entry.get("cmd") and os.path.basename(entry["cmd"].strip('"')) in base_names) or 
+                (entry.get("detached") and any(os.path.basename(detached_item.strip('"')) in base_names for detached_item in entry["detached"]))
+            )
+        )
     ]
     print("已删除不符合条件的条目")
 
@@ -870,6 +956,163 @@ def find_unused_index(apps_json, image_target_paths):
         index += 1
     return index
 
+# ========== SGDB封面选择窗口全局函数 ==========
+def choose_cover_with_sgdb(app_name, output_path, exe_path=None):
+    import tkinter as tk
+    from tkinter import messagebox
+    import requests
+    from PIL import Image, ImageTk
+    from io import BytesIO
+    import threading
+    cover_win = tk.Toplevel()
+    cover_win.title(f"SGDB封面选择 - {app_name} - 正在搜索游戏，请耐心等待")
+    width, height = 800, 500
+    x = (root.winfo_screenwidth() // 2) - (width // 2)
+    y = (root.winfo_screenheight() // 2) - (height // 2)
+    cover_win.geometry(f"{width}x{height}+{x}+{y}")
+    cover_win.update()
+    api_key = "1b378d4482f7088146d2f7e320139b74"
+    class SteamGridDBApi:
+        def __init__(self, api_key):
+            self.api_key = api_key
+            self.base_url = "https://www.steamgriddb.com/api/v2"
+            self.headers = {"Authorization": f"Bearer {api_key}"}
+        def search_game(self, name):
+            url = f"{self.base_url}/search/autocomplete/{name}"
+            r = requests.get(url, headers=self.headers)
+            r.raise_for_status()
+            return r.json()["data"]
+        def get_grids(self, game_id):
+            url = f"{self.base_url}/grids/game/{game_id}?types=static&dimensions=600x900"
+            r = requests.get(url, headers=self.headers)
+            r.raise_for_status()
+            return r.json()["data"]
+    sgdb = SteamGridDBApi(api_key)
+    search_frame = tk.Frame(cover_win)
+    search_frame.pack(fill=tk.X, padx=10, pady=5)
+    tk.Label(search_frame, text="SGDB搜索:").pack(side=tk.LEFT)
+    search_var = tk.StringVar(value=app_name)
+    entry = tk.Entry(search_frame, textvariable=search_var, width=30)
+    entry.pack(side=tk.LEFT)
+    result_listbox = tk.Listbox(cover_win, width=40, height=10)
+    result_listbox.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
+    thumb_frame = tk.Frame(cover_win)
+    thumb_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+    grid_images = []
+    grid_datas = []
+    grids_meta = []
+    result = {"path": None, "used_icon": False}
+    stop_event = threading.Event()  # 新增线程终止事件
+    fetch_thread = [None]  # 用列表包裹以便内部赋值
+    def do_search():
+        name = search_var.get().strip()
+        if not name:
+            messagebox.showwarning("提示", "请输入游戏名称")
+            return
+        result_listbox.delete(0, tk.END)
+        try:
+            games = sgdb.search_game(name)
+            for g in games:
+                result_listbox.insert(tk.END, f"{g['name']} (ID: {g['id']})")
+            if games:
+                result_listbox.select_set(0)
+                load_covers()
+        except Exception as e:
+            messagebox.showerror("错误", f"搜索失败: {e}")
+    def load_covers(event=None):
+        idx = result_listbox.curselection()
+        if not idx:
+            messagebox.showwarning("提示", "请先选择一个游戏")
+            return
+        game_id = sgdb.search_game(search_var.get().strip())[idx[0]]["id"]
+        def fetch():
+            try:
+                grids = sgdb.get_grids(game_id)
+                if not grids:
+                    cover_win.after(0, lambda: messagebox.showinfo("提示", "未找到该游戏的封面"))
+                    return
+                def clear_thumbs():
+                    for widget in thumb_frame.winfo_children():
+                        widget.destroy()
+                    grid_images.clear()
+                    grid_datas.clear()
+                    grids_meta.clear()
+                cover_win.after(0, clear_thumbs)
+                import functools
+                for i, grid in enumerate(grids[:8]):
+                    if stop_event.is_set():
+                        return
+                    url = grid["url"]
+                    try:
+                        resp = requests.get(url)
+                        if stop_event.is_set(): 
+                            return
+                        img_data = resp.content
+                        image = Image.open(BytesIO(img_data))
+                        thumb = image.copy()
+                        thumb.thumbnail((100, 150))
+                        thumb_img = ImageTk.PhotoImage(thumb)
+                        grid_images.append(thumb_img)
+                        grid_datas.append(img_data)
+                        grids_meta.append(grid)
+                        def create_btn(idx, timg):
+                            btn = tk.Button(thumb_frame, image=timg, command=functools.partial(save_cover, idx))
+                            btn.grid(row=idx//4, column=idx%4, padx=5, pady=5)
+                        cover_win.after(0, create_btn, i, thumb_img)
+                    except Exception as e:
+                        print(f"加载图片失败: {e}")
+            except Exception as e:
+                if not stop_event.is_set():
+                    cover_win.after(0, lambda: messagebox.showerror("错误", f"获取封面失败: {e}"))
+        # 启动前先终止旧线程
+        if fetch_thread[0] and fetch_thread[0].is_alive():
+            stop_event.set()
+            fetch_thread[0].join()
+            stop_event.clear()
+        fetch_thread[0] = threading.Thread(target=fetch, daemon=True)
+        fetch_thread[0].start()
+    def save_cover(idx):
+        if idx >= len(grid_datas):
+            print("图片尚未加载完成，无法保存。")
+            return
+        stop_event.set()  # 终止图片加载线程
+        img_data = grid_datas[idx]
+        with open(output_path, "wb") as f:
+            f.write(img_data)
+        result["path"] = output_path
+        result["used_icon"] = False
+        cover_win.destroy()
+        cover_win.quit()
+    def on_close():
+        # 新增：参数启动时关闭窗口直接退出
+        if len(sys.argv) >= 3 and sys.argv[1] == "-choosecover":
+            sys.exit(0)
+        stop_event.set()
+        cover_win.destroy()
+        cover_win.quit()
+    #def use_icon():
+    #    stop_event.set()  # 终止图片加载线程
+    #    if exe_path:
+    #        import os, re
+    #        safe_name = re.sub(r'[\w]', '_', app_name)
+    #        output_dir = os.path.dirname(output_path)
+    #        icon_img_path = create_image_with_icon(exe_path, output_dir, app_name)
+    #        result["path"] = icon_img_path
+    #        result["used_icon"] = True
+    #    cover_win.destroy()
+    #btn_frame = tk.Frame(cover_win)
+    #btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
+    #tk.Button(btn_frame, text="使用图标作为封面", command=use_icon, width=30, bg="#aaaaaa").pack()
+    entry.bind('<Return>', lambda e: do_search())
+    tk.Button(search_frame, text="搜索", command=do_search).pack(side=tk.LEFT, padx=5)
+    tk.Label(search_frame, text="图片加载较慢，请耐心等候").pack(side=tk.LEFT, padx=5)
+    result_listbox.bind('<Double-Button-1>', load_covers)
+    do_search()
+    cover_win.protocol("WM_DELETE_WINDOW", on_close)
+    cover_win.title(f"SGDB封面选择 - {app_name}")
+    cover_win.mainloop()
+    return result["path"], result["used_icon"]
+
 def main():
     global folder_selected, onestart, close_after_completion, pseudo_sorting_enabled, lnkandurl_files
     # 获取当前目录下所有有效的 .lnk 和 .url 文件
@@ -918,11 +1161,20 @@ def main():
         if is_existing:
             print(f"跳过已存在的条目: {target_path}")
             continue  # 跳过已有条目的处理
+        app_name = os.path.splitext(os.path.basename(lnkandurl_files[idx]))[0]
+        exe_path = target_path
+        output_dir = output_folder
+        # ========== 优先为steam游戏设置封面 ==========
         output_index = find_unused_index(apps_json, image_target_paths)  # 获取未使用的索引
-        image_target_paths.append((lnkandurl_files[idx], output_index))
-        output_path = os.path.join(output_folder, f"output_image{output_index}.png")
-        create_image_with_icon(target_path, output_path, idx)
-
+        cover_path = try_set_steam_cover_for_shortcut(app_name, lnkandurl_files[idx], output_dir, output_index)
+        if cover_path:
+            image_target_paths.append((lnkandurl_files[idx], output_index))
+            print(f"已为Steam游戏 {app_name} 设置本地封面: {cover_path}")
+        else:
+            image_target_paths.append((lnkandurl_files[idx], output_index))
+            output_path = os.path.join(output_folder, f"output_image{output_index}.png")
+            create_image_with_icon(target_path, output_path, idx)
+            print(f"已生成封面: {app_name}")
     # 转换 modified_target_paths
     modified_target_paths1 = modified_target_paths
     modified_target_paths = []
@@ -958,5 +1210,88 @@ def main():
     if close_after_completion:
         os._exit(0)  # 正常退出
 
+# ========== 新增：为steam游戏快捷方式优先设置封面 ==========
+def try_set_steam_cover_for_shortcut(app_name, target_path, output_dir, index):
+    """
+    检查 target_path 是否为 steam 游戏快捷方式，若是则尝试用本地 steam 封面，成功返回图片路径，否则返回 None。
+    """
+    import re
+    steamid = None
+    # 检查.lnk/.url文件内容是否包含 steam://rungameid/ 并提取id
+    try:
+        if target_path.lower().endswith('.url'):
+            with open(target_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if line.startswith("URL=") and "steam://rungameid/" in line:
+                        m = re.search(r'steam://rungameid/(\d+)', line)
+                        if m:
+                            steamid = m.group(1)
+                            break
+    except Exception as e:
+        print(f"检查steam快捷方式失败: {e}")
+        return None
+    if not steamid:
+        return None
+    # 查找本地steam封面
+    steam_base_dir = get_steam_base_dir()
+    if not steam_base_dir:
+        return None
+    image_path = f"{steam_base_dir}/appcache/librarycache/{steamid}_library_600x900.jpg"
+    if not os.path.exists(image_path):
+        image_path = f"{steam_base_dir}/appcache/librarycache/{steamid}_library_600x900_schinese.jpg"
+        if not os.path.exists(image_path):
+            return None
+    # 拷贝图片到 output_dir，文件名采用统一索引方式
+    import shutil
+    output_path = os.path.join(output_dir, f"output_image{index}.png")
+    try:
+        shutil.copy(image_path, output_path)
+        print(f"已为Steam游戏 {app_name} 设置本地封面: {output_path}")
+        return output_path
+    except Exception as e:
+        print(f"拷贝Steam封面失败: {e}")
+        return None
+
 if __name__ == "__main__":
-    create_gui()  # 启动Tkinter界面
+    # 命令行参数支持
+    if len(sys.argv) >= 3 and sys.argv[1] == "-choosecover":
+        root = tk.Tk()
+        # 1. 读取 apps.json
+        apps_json_path = f"{APP_INSTALL_PATH}\\config\\apps.json"
+        apps_json = load_apps_json(apps_json_path)
+        app_names = [entry["name"] for entry in apps_json.get("apps", [])]
+
+        game_name = sys.argv[2] # 获取游戏名称参数
+        # 找到对应app_entry
+        app_entry = None
+        for entry in apps_json.get("apps", []):
+            if entry["name"] == game_name:
+                app_entry = entry
+                break
+        if app_entry:
+            # 统一调用choose_cover_with_sgdb
+            covers_dir = os.path.join(APP_INSTALL_PATH, "config", "covers")
+            os.makedirs(covers_dir, exist_ok=True)
+            appid = app_entry.get("appid") or app_entry.get("id") or app_entry.get("name")
+            filename = os.path.join(covers_dir, f"{appid}_SGDB.jpg")
+            exe_path = None
+            # 尝试获取可执行路径
+            if app_entry.get("cmd"):
+                exe_path = app_entry["cmd"].strip('"')
+            elif app_entry.get("detached") and len(app_entry["detached"]) > 0:
+                exe_path = app_entry["detached"][0].strip('"')
+            root.withdraw() 
+            choose_cover_with_sgdb(game_name, filename, exe_path)
+            # 如果选择了封面，更新 apps.json
+            if os.path.exists(filename):
+                # 更新 apps.json
+                app_entry["image-path"] = filename.replace("\\", "/")
+                save_apps_json(apps_json, apps_json_path)
+        else:
+            tk.messagebox.showerror("错误", f"未找到游戏名称为 {game_name} 的条目")
+        sys.exit(0)
+    if "-run" in sys.argv:
+        onestart = False
+        create_gui()
+    else:
+        create_gui()  # 启动Tkinter界面
