@@ -1,4 +1,5 @@
 import os 
+import subprocess
 import time
 import glob
 import json
@@ -967,9 +968,12 @@ def choose_cover_with_sgdb(app_name, output_path, exe_path=None):
     cover_win = tk.Toplevel()
     cover_win.title(f"SGDB封面选择 - {app_name} - 正在搜索游戏，请耐心等待")
     width, height = 800, 500
-    x = (root.winfo_screenwidth() // 2) - (width // 2)
-    y = (root.winfo_screenheight() // 2) - (height // 2)
-    cover_win.geometry(f"{width}x{height}+{x}+{y}")
+    if hasattr(sys.modules[__name__], 'root'):
+        x = (root.winfo_screenwidth() // 2) - (width // 2)
+        y = (root.winfo_screenheight() // 2) - (height // 2)
+        cover_win.geometry(f"{width}x{height}+{x}+{y}")
+    else:
+        cover_win.geometry(f"{width}x{height}")
     cover_win.update()
     api_key = "1b378d4482f7088146d2f7e320139b74"
     class SteamGridDBApi:
@@ -1155,6 +1159,7 @@ def main():
     # 删除不存在的条目
     remove_entries_with_output_image(apps_json, lnkandurl_files)
     image_target_paths = []
+    need_choose_cover_names = []
     print("--------------------生成封面--------------------")
     # 创建并处理图像
     for idx, (target_path, is_existing) in enumerate(modified_target_paths):
@@ -1175,6 +1180,7 @@ def main():
             output_path = os.path.join(output_folder, f"output_image{output_index}.png")
             create_image_with_icon(target_path, output_path, idx)
             print(f"已生成封面: {app_name}")
+            need_choose_cover_names.append(app_name)  # 记录需要选择封面的app_name
     # 转换 modified_target_paths
     modified_target_paths1 = modified_target_paths
     modified_target_paths = []
@@ -1207,6 +1213,15 @@ def main():
     # 保存更新后的 apps.json 文件
     save_apps_json(apps_json, apps_json_path)
     restart_service()
+    # 新增：统一调用-choosecover进行选择
+    if need_choose_cover_names:
+        exe_path = sys.executable if getattr(sys, 'frozen', False) else sys.argv[0]
+        for name in need_choose_cover_names:
+            try:
+                process = subprocess.Popen([exe_path, "-choosecover", name])
+                process.wait()  # 等待子进程完成
+            except Exception as e:
+                print(f"调用SGDB封面选择失败: {e}")
     if close_after_completion:
         os._exit(0)  # 正常退出
 
@@ -1289,6 +1304,113 @@ if __name__ == "__main__":
                 save_apps_json(apps_json, apps_json_path)
         else:
             tk.messagebox.showerror("错误", f"未找到游戏名称为 {game_name} 的条目")
+        sys.exit(0)
+    if len(sys.argv) >= 3 and sys.argv[1] == "-addlnk":
+        target_path = sys.argv[2]
+        folder_selected = load_config()
+        if not os.path.isdir(folder_selected):
+            messagebox.showerror("错误", f"目标文件夹不存在: {folder_selected}")
+            sys.exit(1)
+        if not os.path.exists(target_path):
+            messagebox.showerror("错误", f"指定的程序路径不存在: {target_path}")
+            sys.exit(1)
+        # 生成快捷方式名称
+        base_name = os.path.splitext(os.path.basename(target_path))[0]
+        lnk_name = f"{base_name}.lnk"
+        lnk_path = os.path.join(folder_selected, lnk_name)
+        try:
+            pythoncom.CoInitialize()
+            shell = win32com.client.Dispatch("WScript.Shell")
+            shortcut = shell.CreateShortCut(lnk_path)
+            shortcut.TargetPath = target_path
+            shortcut.WorkingDirectory = os.path.dirname(target_path)
+            shortcut.IconLocation = target_path
+            shortcut.save()
+            messagebox.showinfo("成功", f"已创建快捷方式: {lnk_path}")
+            onestart = False
+            create_gui()
+        except Exception as e:
+            messagebox.showerror("错误", f"创建快捷方式失败: {e}")
+            sys.exit(1)
+        sys.exit(0)
+    if len(sys.argv) >= 3 and sys.argv[1] == "-delete":
+        del_name = sys.argv[2]
+        folder_selected = load_config()
+        found = False
+        # 1. 删除文件夹中的 .lnk 或 .url 文件
+        for ext in [".lnk", ".url"]:
+            file_path = os.path.join(folder_selected, f"{del_name}{ext}")
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    print(f"已删除文件: {file_path}")
+                    found = True
+                    onestart = False
+                    create_gui()
+                except Exception as e:
+                    print(f"删除文件失败: {file_path}，原因: {e}")
+        # 2. 如果没找到，尝试在 apps.json 中删除
+        if not found:
+            apps_json_path = f"{APP_INSTALL_PATH}\\config\\apps.json"
+            apps_json = load_apps_json(apps_json_path)
+            before = len(apps_json["apps"])
+            # 支持带序号的伪排序名称
+            import re
+            apps_json["apps"] = [
+                entry for entry in apps_json["apps"]
+                if not (
+                    entry.get("name") == del_name or
+                    re.sub(r'^\d{2} ', '', entry.get("name", "")) == del_name
+                )
+            ]
+            after = len(apps_json["apps"])
+            if after < before:
+                save_apps_json(apps_json, apps_json_path)
+                print(f"已从 apps.json 删除名称为 {del_name} 的条目")
+                found = True
+        if not found:
+            print(f"未找到名称为 {del_name} 的快捷方式或 apps.json 条目")
+        sys.exit(0)
+    if len(sys.argv) >= 4 and sys.argv[1] == "-rename":
+        old_name = sys.argv[2]
+        new_name = sys.argv[3]
+        folder_selected = load_config()
+        found = False
+        # 1. 重命名文件夹中的 .lnk 或 .url 文件
+        for ext in [".lnk", ".url"]:
+            old_path = os.path.join(folder_selected, f"{old_name}{ext}")
+            new_path = os.path.join(folder_selected, f"{new_name}{ext}")
+            if os.path.exists(old_path):
+                try:
+                    os.rename(old_path, new_path)
+                    print(f"已重命名文件: {old_path} -> {new_path}")
+                    found = True
+                    onestart = False
+                    create_gui()
+                except Exception as e:
+                    print(f"重命名文件失败: {old_path}，原因: {e}")
+        # 2. 如果没找到文件，则尝试在 apps.json 中重命名
+        if not found:
+            apps_json_path = f"{APP_INSTALL_PATH}\\config\\apps.json"
+            apps_json = load_apps_json(apps_json_path)
+            import re
+            changed = False
+            for entry in apps_json["apps"]:
+                entry_name = entry.get("name", "")
+                if entry_name == old_name or re.sub(r'^\d{2} ', '', entry_name) == old_name:
+                    # 保留伪排序前缀
+                    prefix = ""
+                    m = re.match(r'^(\d{2} )', entry_name)
+                    if m:
+                        prefix = m.group(1)
+                    entry["name"] = prefix + new_name
+                    changed = True
+            if changed:
+                save_apps_json(apps_json, apps_json_path)
+                print(f"已在 apps.json 中重命名为 {new_name}")
+                found = True
+        if not found:
+            print(f"未找到名称为 {old_name} 的快捷方式或 apps.json 条目")
         sys.exit(0)
     if "-run" in sys.argv:
         onestart = False
