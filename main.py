@@ -25,9 +25,129 @@ import win32con
 import win32security
 import win32process
 import vdf
-#PyInstaller main.py -i fav.ico --uac-admin --noconsole
-#将两个程序使用PyInstaller打包后，将quick_add.exe和其文件夹粘贴到该main所生成的程序目录中（相同文件可跳过
+#& C:/Users/86150/AppData/Local/Programs/Python/Python38/python.exe -m PyInstaller main.py -i fav.ico --uac-admin --noconsole --additional-hooks-dir=. --noconfirm
 #312 INFO: PyInstaller: 6.6.0, contrib hooks: 2024.4 Python: 3.8.5 Platform: Windows-10-10.0.22621-SP0
+from tkinterdnd2 import *
+class RedirectPrint:
+    def __init__(self, label):
+        self.label = label
+        self.buffer = ""
+
+    def write(self, text):
+        self.buffer += text
+        self.label.config(text=self.buffer)
+        self.label.update()
+
+    def flush(self):
+        pass
+
+def quickaddmain():
+    # 从命令行参数获取目标文件夹
+    if len(sys.argv) < 3:
+        print("错误：未提供目标文件夹路径")
+        return
+        
+    target_folder = sys.argv[2]  # 获取第二个参数作为目标文件夹路径
+    if not os.path.exists(target_folder):
+        print(f"错误：目标文件夹不存在: {target_folder}")
+        return
+
+    # 创建新窗口
+    add_window = TkinterDnD.Tk()
+    add_window.title("快速添加")
+    add_window.geometry("360x250")
+    add_window.attributes("-topmost", True)  # 窗口始终显示于最前端
+    # 创建标签用于显示拖放区域
+    drop_label = tk.Label(add_window, text="拖放文件到这里\n或点击下方按钮选择文件", 
+                         relief="solid", borderwidth=2, width=45, height=9)
+    drop_label.pack(pady=20)
+
+    # 重定向输出到drop_label
+    redirector = RedirectPrint(drop_label)
+    sys.stdout = redirector
+    sys.stderr = redirector
+
+    # 处理文件的函数
+    def process_file(file_path):
+        if not file_path:
+            return
+
+        # 检查文件扩展名
+        if not file_path.lower().endswith('.exe'):
+            print("请选择.exe文件")
+            return
+
+        shortcut_name = os.path.splitext(os.path.basename(file_path))[0] + ".lnk"
+        shortcut_path = os.path.join(target_folder, shortcut_name)
+
+        # 如果是lnk文件，直接复制
+        if file_path.endswith('.lnk'):
+            shutil.copy(file_path, shortcut_path)
+        else:
+            # 创建新的快捷方式
+            shell = win32com.client.Dispatch("WScript.Shell")
+            shortcut = shell.CreateShortCut(shortcut_path)
+            shortcut.TargetPath = file_path
+            shortcut.WorkingDirectory = os.path.dirname(file_path)
+            shortcut.save()
+        
+        print(f"快捷方式已创建: {shortcut_path}")
+        add_window.destroy()
+
+    # 创建按钮用于选择文件
+    def select_file():
+        selected_file = filedialog.askopenfilename(
+            title="选择一个exe可执行文件，生成快捷方式到目录文件夹",
+            filetypes=[("Executable Files", "*.exe")]
+        )
+        if selected_file:
+            process_file(selected_file)
+
+    select_button = tk.Button(add_window, text="选择文件", width=25, bg='#aaaaaa', command=select_file)
+    select_button.pack(side=tk.LEFT, padx=5)
+
+    # 创建关闭按钮
+    close_button = tk.Button(add_window, text="关闭", width=20, bg='#aaaaaa', command=add_window.destroy)
+    close_button.pack(side=tk.LEFT)
+
+    # 实现拖放功能
+    def on_drop(event):
+        try:
+            # 获取拖放的文件路径
+            file_path = event.data.strip('{}')  # 移除可能的大括号
+            if not file_path:
+                return
+                
+            # 处理多个文件的情况（只取第一个）
+            if isinstance(file_path, tuple):
+                file_path = file_path[0]
+                
+            # 检查文件是否存在
+            if not os.path.exists(file_path):
+                print(f"文件不存在: {file_path}")
+                return
+                
+            if file_path.lower().endswith('.exe') or file_path.lower().endswith('.lnk'):
+                process_file(file_path)
+            else:
+                print("只能处理 .exe 或 .lnk 文件")
+        except Exception as e:
+            print(f"处理拖放文件时出错: {e}")
+
+    # 设置拖放目标
+    try:
+        add_window.drop_target_register(DND_FILES)
+        add_window.dnd_bind('<<Drop>>', on_drop)
+    except Exception as e:
+        print(f"初始化拖放功能时出错: {e}")
+        # 如果拖放功能初始化失败，禁用拖放功能
+        drop_label.config(text="拖放功能不可用\n请使用选择文件按钮")
+
+    add_window.mainloop()
+
+if len(sys.argv) > 2 and sys.argv[1] == "-quickadd":
+    quickaddmain() 
+    sys.exit(0)  # 退出程序
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning) #禁用SSL警告
 # 在文件开头添加全局变量
 hidden_files = []
@@ -569,17 +689,6 @@ def create_gui():
             return
 
         try:
-            if getattr(sys, 'frozen', False):
-                current_dir = os.path.dirname(sys.executable)
-            else:
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-
-            quick_add_path = os.path.join(current_dir, "quick_add.exe")
-            
-            if not os.path.exists(quick_add_path):
-                print(f"错误：未找到quick_add.exe，请确保它与主程序在同一目录下")
-                return
-
             # 获取当前用户的令牌
             token = win32security.OpenProcessToken(
                 win32api.GetCurrentProcess(),
@@ -611,8 +720,8 @@ def create_gui():
             
             process_info = win32process.CreateProcessAsUser(
                 new_token,
-                None,  # 应用程序名
-                f'"{quick_add_path}" "{folder}"',  # 命令行
+                sys.executable,  # application_name: 只写可执行文件路径
+                f'"{sys.executable}" -quickadd "{folder}"',  # command_line: 包含命令行参数
                 None,  # 进程安全属性
                 None,  # 线程安全属性
                 False,  # 不继承句柄
@@ -653,7 +762,7 @@ def create_gui():
             runonestart()
             
         except Exception as e:
-            print(f"运行quick_add.exe时出错: {e}")
+            print(f"运行quickadd时出错: {e}")
 
     button2 = tk.Button(root, text="快速\n添加", width=6, height=2, bg='#aaaaaa', fg='white') 
     button2.pack(side=tk.RIGHT, padx=0, pady=(3, 3))
@@ -1306,6 +1415,8 @@ if __name__ == "__main__":
             tk.messagebox.showerror("错误", f"未找到游戏名称为 {game_name} 的条目")
         sys.exit(0)
     if len(sys.argv) >= 3 and sys.argv[1] == "-addlnk":
+        root1 = tk.Tk()
+        root1.withdraw()  # 隐藏主窗口
         target_path = sys.argv[2]
         folder_selected = load_config()
         if not os.path.isdir(folder_selected):
@@ -1326,8 +1437,9 @@ if __name__ == "__main__":
             shortcut.WorkingDirectory = os.path.dirname(target_path)
             shortcut.IconLocation = target_path
             shortcut.save()
-            messagebox.showinfo("成功", f"已创建快捷方式: {lnk_path}")
+            #messagebox.showinfo("成功", f"已创建快捷方式: {lnk_path}")
             onestart = False
+            root1.destroy()  # 销毁隐藏窗口
             create_gui()
         except Exception as e:
             messagebox.showerror("错误", f"创建快捷方式失败: {e}")
@@ -1336,82 +1448,97 @@ if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "-delete":
         del_name = sys.argv[2]
         folder_selected = load_config()
+        apps_json_path = f"{APP_INSTALL_PATH}\\config\\apps.json"
+        apps_json = load_apps_json(apps_json_path)
+        import re
         found = False
-        # 1. 删除文件夹中的 .lnk 或 .url 文件
-        for ext in [".lnk", ".url"]:
-            file_path = os.path.join(folder_selected, f"{del_name}{ext}")
-            if os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                    print(f"已删除文件: {file_path}")
-                    found = True
-                    onestart = False
-                    create_gui()
-                except Exception as e:
-                    print(f"删除文件失败: {file_path}，原因: {e}")
-        # 2. 如果没找到，尝试在 apps.json 中删除
-        if not found:
-            apps_json_path = f"{APP_INSTALL_PATH}\\config\\apps.json"
-            apps_json = load_apps_json(apps_json_path)
-            before = len(apps_json["apps"])
-            # 支持带序号的伪排序名称
-            import re
+    
+        # 1. 先在 apps.json 查找对应条目（支持伪排序名）
+        matched_entry = None
+        for entry in apps_json["apps"]:
+            entry_name = entry.get("name", "")
+            if entry_name == del_name or re.sub(r'^\d{2} ', '', entry_name) == del_name:
+                matched_entry = entry
+                break
+    
+        if matched_entry:
+            # 2. 检查 cmd 或 detached 字段，判断快捷方式是否存在
+            possible_files = []
+            if matched_entry.get("cmd"):
+                cmd_path = matched_entry["cmd"].strip('"')
+                base = os.path.splitext(os.path.basename(cmd_path))[0]
+                for ext in [".lnk", ".url"]:
+                    possible_files.append(os.path.join(folder_selected, f"{base}{ext}"))
+            if matched_entry.get("detached"):
+                for det in matched_entry["detached"]:
+                    det_path = det.strip('"')
+                    base = os.path.splitext(os.path.basename(det_path))[0]
+                    for ext in [".lnk", ".url"]:
+                        possible_files.append(os.path.join(folder_selected, f"{base}{ext}"))
+            # 3. 删除存在的快捷方式文件
+            for file_path in possible_files:
+                if os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                        print(f"已删除文件: {file_path}")
+                        found = True
+                    except Exception as e:
+                        print(f"删除文件失败: {file_path}，原因: {e}")
+            # 4. apps.json 删除该条目
             apps_json["apps"] = [
                 entry for entry in apps_json["apps"]
-                if not (
-                    entry.get("name") == del_name or
-                    re.sub(r'^\d{2} ', '', entry.get("name", "")) == del_name
-                )
+                if entry is not matched_entry
             ]
-            after = len(apps_json["apps"])
-            if after < before:
-                save_apps_json(apps_json, apps_json_path)
-                print(f"已从 apps.json 删除名称为 {del_name} 的条目")
-                found = True
-        if not found:
-            print(f"未找到名称为 {del_name} 的快捷方式或 apps.json 条目")
-        sys.exit(0)
-    if len(sys.argv) >= 4 and sys.argv[1] == "-rename":
-        old_name = sys.argv[2]
-        new_name = sys.argv[3]
-        folder_selected = load_config()
-        found = False
-        # 1. 重命名文件夹中的 .lnk 或 .url 文件
-        for ext in [".lnk", ".url"]:
-            old_path = os.path.join(folder_selected, f"{old_name}{ext}")
-            new_path = os.path.join(folder_selected, f"{new_name}{ext}")
-            if os.path.exists(old_path):
-                try:
-                    os.rename(old_path, new_path)
-                    print(f"已重命名文件: {old_path} -> {new_path}")
-                    found = True
-                    onestart = False
-                    create_gui()
-                except Exception as e:
-                    print(f"重命名文件失败: {old_path}，原因: {e}")
-        # 2. 如果没找到文件，则尝试在 apps.json 中重命名
-        if not found:
-            apps_json_path = f"{APP_INSTALL_PATH}\\config\\apps.json"
-            apps_json = load_apps_json(apps_json_path)
-            import re
-            changed = False
-            for entry in apps_json["apps"]:
-                entry_name = entry.get("name", "")
-                if entry_name == old_name or re.sub(r'^\d{2} ', '', entry_name) == old_name:
-                    # 保留伪排序前缀
-                    prefix = ""
-                    m = re.match(r'^(\d{2} )', entry_name)
-                    if m:
-                        prefix = m.group(1)
-                    entry["name"] = prefix + new_name
-                    changed = True
-            if changed:
-                save_apps_json(apps_json, apps_json_path)
-                print(f"已在 apps.json 中重命名为 {new_name}")
-                found = True
-        if not found:
-            print(f"未找到名称为 {old_name} 的快捷方式或 apps.json 条目")
-        sys.exit(0)
+            save_apps_json(apps_json, apps_json_path)
+            print(f"已从 apps.json 删除名称为 {del_name} 的条目")
+            #if found:
+            #    onestart = False
+            #    create_gui()
+            sys.exit(0)
+        else:
+            print(f"未找到名称为 {del_name} 的 apps.json 条目")
+            sys.exit(0)
+    # if len(sys.argv) >= 4 and sys.argv[1] == "-rename":
+    #     old_name = sys.argv[2]
+    #     new_name = sys.argv[3]
+    #     folder_selected = load_config()
+    #     found = False
+    #     # 1. 重命名文件夹中的 .lnk 或 .url 文件
+    #     for ext in [".lnk", ".url"]:
+    #         old_path = os.path.join(folder_selected, f"{old_name}{ext}")
+    #         new_path = os.path.join(folder_selected, f"{new_name}{ext}")
+    #         if os.path.exists(old_path):
+    #             try:
+    #                 os.rename(old_path, new_path)
+    #                 print(f"已重命名文件: {old_path} -> {new_path}")
+    #                 found = True
+    #                 onestart = False
+    #                 create_gui()
+    #             except Exception as e:
+    #                 print(f"重命名文件失败: {old_path}，原因: {e}")
+    #     # 2. 如果没找到文件，则尝试在 apps.json 中重命名
+    #     if not found:
+    #         apps_json_path = f"{APP_INSTALL_PATH}\\config\\apps.json"
+    #         apps_json = load_apps_json(apps_json_path)
+    #         import re
+    #         changed = False
+    #         for entry in apps_json["apps"]:
+    #             entry_name = entry.get("name", "")
+    #             if entry_name == old_name or re.sub(r'^\d{2} ', '', entry_name) == old_name:
+    #                 # 保留伪排序前缀
+    #                 prefix = ""
+    #                 m = re.match(r'^(\d{2} )', entry_name)
+    #                 if m:
+    #                     prefix = m.group(1)
+    #                 entry["name"] = prefix + new_name
+    #                 changed = True
+    #         if changed:
+    #             save_apps_json(apps_json, apps_json_path)
+    #             print(f"已在 apps.json 中重命名为 {new_name}")
+    #             found = True
+    #     if not found:
+    #         print(f"未找到名称为 {old_name} 的快捷方式或 apps.json 条目")
+    #     sys.exit(0)
     if "-run" in sys.argv:
         onestart = False
         create_gui()
