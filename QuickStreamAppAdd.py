@@ -164,6 +164,7 @@ skipped_entries = []
 folder_selected = ''
 close_after_completion = True  # 默认开启
 pseudo_sorting_enabled = False  # 新增伪排序适应选项，默认关闭
+auto_delete_orphaned_entries = False  # 自动删除孤立条目（不再询问），默认关闭
 
 # 重定向print函数，使输出显示在tkinter的文本框中
 class RedirectPrint:
@@ -216,7 +217,7 @@ def save_apps_json(apps_json, file_path):
 
 def load_config():
     """加载配置文件"""
-    global close_after_completion, pseudo_sorting_enabled, hidden_files ,folder, steam_excluded_games
+    global close_after_completion, pseudo_sorting_enabled, hidden_files ,folder, steam_excluded_games, auto_delete_orphaned_entries
     config.read(config_file_path)
     folder = config.get('Settings', 'folder_selected', fallback='')
     hidden_files_str = config.get('Settings', 'hidden_files', fallback='')  # 获取隐藏的文件路径字符串
@@ -226,6 +227,8 @@ def load_config():
     # 新增 steam_excluded_games
     steam_excluded_games_str = config.get('Settings', 'steam_excluded_games', fallback='')
     steam_excluded_games = steam_excluded_games_str.split(',') if steam_excluded_games_str else []
+    # 新增 auto_delete_orphaned_entries
+    auto_delete_orphaned_entries = config.getboolean('Settings', 'auto_delete_orphaned_entries', fallback=False)
     if os.path.exists(config_file_path)==False:
         save_config()  #没有配置文件保存下
     # 检查 folder 是否有效
@@ -247,7 +250,7 @@ def load_config():
 def save_config():
     """保存选择的目录到配置文件"""
     try:
-        global hidden_files, folder, close_after_completion, pseudo_sorting_enabled, steam_excluded_games  # 添加全局变量声明
+        global hidden_files, folder, close_after_completion, pseudo_sorting_enabled, steam_excluded_games, auto_delete_orphaned_entries  # 添加全局变量声明
         config['Settings'] = {
             'folder_selected': folder,
             'close_after_completion': close_after_completion,
@@ -255,7 +258,9 @@ def save_config():
             # 将 hidden_files 列表转换为逗号分隔的字符串
             'hidden_files': ','.join(hidden_files) if hidden_files else '',
             # 新增 steam_excluded_games
-            'steam_excluded_games': ','.join(steam_excluded_games) if steam_excluded_games else ''
+            'steam_excluded_games': ','.join(steam_excluded_games) if steam_excluded_games else '',
+            # 新增 auto_delete_orphaned_entries
+            'auto_delete_orphaned_entries': auto_delete_orphaned_entries
         }
         with open(config_file_path, 'w') as configfile:
             config.write(configfile)
@@ -313,7 +318,7 @@ def generate_steamapp(app_id):
     return image_path
 # 创建Tkinter窗口
 def create_gui():
-    global folder_selected, close_after_completion, hidden_files
+    global folder_selected, close_after_completion, hidden_files, root
     # 确保 folder_selected 是有效的目录
     root = tk.Tk()
     root.title("QuickStreamAppAdd")
@@ -810,10 +815,13 @@ def create_gui():
                 elif app_entry.get("detached") and len(app_entry["detached"]) > 0:
                     exe_path = app_entry["detached"][0].strip('"')
                 select_win.destroy()
-                choose_cover_with_sgdb(game_name, filename, exe_path)
+                cover_path, used_icon, sgdb_name = choose_cover_with_sgdb(game_name, filename, exe_path)
                 # 如果选择了封面，更新 apps.json
                 if os.path.exists(filename):
                     app_entry["image-path"] = filename.replace("\\", "/")
+                    # 如果返回了SGDB游戏名称，则更新名称
+                    if sgdb_name:
+                        app_entry["name"] = sgdb_name
                     save_apps_json(apps_json, apps_json_path)
         listbox.bind('<Double-Button-1>', on_select)
         fold_frame = tk.Frame(select_win)
@@ -998,19 +1006,125 @@ def add_entries_to_apps_json(valid_lnk_files, apps_json, modified_target_paths,i
 
 def remove_entries_with_output_image(apps_json, base_names):
     # 删除 apps.json 中包含 "output_image" 或"_SGDB"或"_library_600x900"的条目，且 cmd 和 detached 字段不在 base_names 中
-    apps_json['apps'] = [
-        entry for entry in apps_json['apps'] 
-        if not (
-            ("output_image" in entry.get("image-path", "") or
+    
+    # 先找出需要删除的条目
+    entries_to_delete = []
+    for entry in apps_json['apps']:
+        if (("output_image" in entry.get("image-path", "") or
              "_SGDB" in entry.get("image-path", "") or
              "_library_600x900" in entry.get("image-path", ""))
             and not (
                 (entry.get("cmd") and os.path.basename(entry["cmd"].strip('"')) in base_names) or 
                 (entry.get("detached") and any(os.path.basename(detached_item.strip('"')) in base_names for detached_item in entry["detached"]))
-            )
-        )
-    ]
-    print("已删除不符合条件的条目")
+            )):
+            entries_to_delete.append(entry)
+    
+    # 如果没有需要删除的条目，直接返回
+    if not entries_to_delete:
+        return
+    
+    # 如果设置了自动删除，直接删除
+    global auto_delete_orphaned_entries
+    if auto_delete_orphaned_entries:
+        apps_json['apps'] = [
+            entry for entry in apps_json['apps'] 
+            if entry not in entries_to_delete
+        ]
+        print(f"已自动删除 {len(entries_to_delete)} 个不符合条件的条目")
+        return
+    
+    # 询问用户是否删除
+    deleted_entry_names = [entry.get("name", "未知") for entry in entries_to_delete]
+    entry_list = "\n".join([f"  - {name}" for name in deleted_entry_names[:10]])  # 最多显示10个
+    if len(deleted_entry_names) > 10:
+        entry_list += f"\n  ... 还有 {len(deleted_entry_names) - 10} 个条目"
+    
+    message = f"检测到 {len(entries_to_delete)} 个孤立的条目需要删除（对应的快捷方式已不存在）：\n\n{entry_list}\n\n是否删除这些条目？"
+    
+    # 创建自定义对话框
+    dialog_result = {"value": None}
+    
+    # 获取主窗口或创建临时窗口
+    parent_window = None
+    try:
+        # 尝试从全局命名空间获取 root
+        if 'root' in globals() and globals()['root']:
+            parent_window = globals()['root']
+    except:
+        pass
+    
+    # 如果无法获取主窗口，创建一个临时根窗口
+    temp_root = None
+    if not parent_window:
+        temp_root = tk.Tk()
+        temp_root.withdraw()
+        parent_window = temp_root
+    
+    dialog = tk.Toplevel(parent_window)
+    dialog.title("确认删除")
+    dialog.geometry("450x350")
+    dialog.attributes("-topmost", True)
+    if parent_window and parent_window != temp_root:
+        try:
+            dialog.transient(parent_window)
+        except:
+            pass
+    
+    # 居中显示
+    dialog.update_idletasks()
+    x = (dialog.winfo_screenwidth() // 2) - (450 // 2)
+    y = (dialog.winfo_screenheight() // 2) - (350 // 2)
+    dialog.geometry(f"450x350+{x}+{y}")
+    
+    tk.Label(dialog, text=message, wraplength=420, justify=tk.LEFT, padx=10, pady=10).pack()
+    
+    button_frame = tk.Frame(dialog)
+    button_frame.pack(pady=20)
+    
+    def delete_click():
+        dialog_result["value"] = "delete"
+        dialog.destroy()
+        if temp_root:
+            temp_root.destroy()
+    
+    def cancel_click():
+        dialog_result["value"] = "cancel"
+        dialog.destroy()
+        if temp_root:
+            temp_root.destroy()
+    
+    def ignore_click():
+        dialog_result["value"] = "ignore"
+        dialog.destroy()
+        if temp_root:
+            temp_root.destroy()
+    
+    tk.Button(button_frame, text="删除", command=delete_click, width=12, bg='#aaaaaa').pack(side=tk.LEFT, padx=5)
+    tk.Button(button_frame, text="取消", command=cancel_click, width=12, bg='#aaaaaa').pack(side=tk.LEFT, padx=5)
+    tk.Button(button_frame, text="忽略并记住", command=ignore_click, width=12, bg='#aaaaaa').pack(side=tk.LEFT, padx=5)
+    
+    dialog.protocol("WM_DELETE_WINDOW", cancel_click)
+    dialog.focus_force()
+    dialog.grab_set()  # 设置为模态对话框
+    dialog.wait_window()
+    if temp_root:
+        temp_root.update()
+    
+    # 处理用户选择
+    if dialog_result["value"] == "delete":
+        apps_json['apps'] = [
+            entry for entry in apps_json['apps'] 
+            if entry not in entries_to_delete
+        ]
+        print(f"已删除 {len(entries_to_delete)} 个不符合条件的条目")
+    elif dialog_result["value"] == "ignore":
+        # 设置自动删除标志，以后不再询问
+        auto_delete_orphaned_entries = True
+        save_config()
+        print("已设置自动删除孤立条目，以后将不再询问")
+    else:
+        # 取消删除
+        print("已取消删除操作")
 
 
 def get_url_files(include_hidden=False):
@@ -1107,16 +1221,43 @@ def choose_cover_with_sgdb(app_name, output_path, exe_path=None):
     search_var = tk.StringVar(value=app_name)
     entry = tk.Entry(search_frame, textvariable=search_var, width=30)
     entry.pack(side=tk.LEFT)
-    result_listbox = tk.Listbox(cover_win, width=40, height=10)
-    result_listbox.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
+    # 左侧区域：游戏列表和勾选框
+    left_panel = tk.Frame(cover_win)
+    left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
+    result_listbox = tk.Listbox(left_panel, width=40, height=10)
+    result_listbox.pack(fill=tk.BOTH, expand=True)
+    # 添加勾选框："将SGDB游戏名称应用至本地"
+    apply_name_var = tk.BooleanVar(value=True)
+    tk.Checkbutton(left_panel, text="将SGDB游戏名称应用至本地", variable=apply_name_var).pack(anchor=tk.W, pady=(5, 0))
     thumb_frame = tk.Frame(cover_win)
     thumb_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
     grid_images = []
     grid_datas = []
     grids_meta = []
-    result = {"path": None, "used_icon": False}
+    result = {"path": None, "used_icon": False, "sgdb_name": None}
     stop_event = threading.Event()  # 新增线程终止事件
     fetch_thread = [None]  # 用列表包裹以便内部赋值
+    selected_game_name = None  # 存储当前选中的SGDB游戏名称
+    # 计算 exe_path 的父目录名，用作备用搜索关键词
+    parent_dir_name = None
+            
+    try:
+        if exe_path:
+            ep = exe_path.strip('"')
+            resolved = ep
+            # 如果是快捷方式，解析到目标可执行路径
+            try:
+                if resolved.lower().endswith('.lnk'):
+                    resolved = get_target_path_from_lnk(resolved)
+                elif resolved.lower().endswith('.url'):
+                    resolved = get_url_target_path(resolved)
+            except Exception:
+                # 解析失败则保留原始路径
+                resolved = ep
+            # 取解析后路径的父目录名
+            parent_dir_name = os.path.basename(os.path.dirname(resolved)) or None
+    except Exception:
+        parent_dir_name = None
     def do_search():
         name = search_var.get().strip()
         if not name:
@@ -1127,8 +1268,13 @@ def choose_cover_with_sgdb(app_name, output_path, exe_path=None):
             games = sgdb.search_game(name)
             for g in games:
                 result_listbox.insert(tk.END, f"{g['name']} (ID: {g['id']})")
+            # 在列表末尾添加一个用父目录名搜索的选项（如果可用）
+            if parent_dir_name:
+                result_listbox.insert(tk.END, f"使用 {parent_dir_name} 搜索")
             if games:
                 result_listbox.select_set(0)
+                nonlocal selected_game_name
+                selected_game_name = games[0]["name"]  # 保存第一个游戏名称
                 load_covers()
         except Exception as e:
             messagebox.showerror("错误", f"搜索失败: {e}")
@@ -1137,7 +1283,18 @@ def choose_cover_with_sgdb(app_name, output_path, exe_path=None):
         if not idx:
             messagebox.showwarning("提示", "请先选择一个游戏")
             return
-        game_id = sgdb.search_game(search_var.get().strip())[idx[0]]["id"]
+        # 如果用户选择了列表中的“使用 <父目录> 搜索”项，则用父目录名重新发起搜索
+        sel_index = idx[0]
+        list_size = result_listbox.size()
+        if parent_dir_name and sel_index == list_size - 1 and result_listbox.get(sel_index).startswith("使用"):
+            # 重新设置搜索词并发起搜索
+            search_var.set(parent_dir_name)
+            do_search()
+            return
+        games = sgdb.search_game(search_var.get().strip())
+        game_id = games[idx[0]]["id"]
+        nonlocal selected_game_name
+        selected_game_name = games[idx[0]]["name"]  # 保存当前选中的游戏名称
         def fetch():
             try:
                 grids = sgdb.get_grids(game_id)
@@ -1194,6 +1351,9 @@ def choose_cover_with_sgdb(app_name, output_path, exe_path=None):
             f.write(img_data)
         result["path"] = output_path
         result["used_icon"] = False
+        # 如果勾选了"将SGDB游戏名称应用至本地"，则保存游戏名称
+        if apply_name_var.get() and selected_game_name:
+            result["sgdb_name"] = selected_game_name
         cover_win.destroy()
         cover_win.quit()
     def on_close():
@@ -1216,15 +1376,139 @@ def choose_cover_with_sgdb(app_name, output_path, exe_path=None):
     #btn_frame = tk.Frame(cover_win)
     #btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
     #tk.Button(btn_frame, text="使用图标作为封面", command=use_icon, width=30, bg="#aaaaaa").pack()
+    def select_local_image():
+        """选择本地图片作为封面"""
+        from tkinter import filedialog
+        file_path = filedialog.askopenfilename(
+            title="选择本地图片",
+            filetypes=[
+                ("图片文件", "*.jpg *.jpeg *.png *.bmp *.gif"),
+                ("JPEG文件", "*.jpg *.jpeg"),
+                ("PNG文件", "*.png"),
+                ("所有文件", "*.*")
+            ]
+        )
+        if not file_path:
+            return  # 用户取消选择
+        
+        try:
+            stop_event.set()  # 终止图片加载线程
+            # 打开并处理图片
+            local_image = Image.open(file_path)
+            # 转换为RGB模式（如果是RGBA等模式）
+            if local_image.mode != 'RGB':
+                local_image = local_image.convert('RGB')
+            
+            # 调整图片大小到 600x900（保持比例，居中裁剪）
+            target_size = (600, 900)
+            # 计算缩放比例，选择较大的比例以填充整个区域
+            scale = max(target_size[0] / local_image.width, target_size[1] / local_image.height)
+            new_width = int(local_image.width * scale)
+            new_height = int(local_image.height * scale)
+            
+            # 使用兼容的方式调用resize
+            try:
+                resampler = Image.Resampling.LANCZOS
+            except AttributeError:
+                resampler = Image.LANCZOS
+            local_image = local_image.resize((new_width, new_height), resampler)
+            
+            # 创建新的图片，居中裁剪
+            final_image = Image.new('RGB', target_size, (0, 0, 0))
+            x_offset = (new_width - target_size[0]) // 2
+            y_offset = (new_height - target_size[1]) // 2
+            # 确保裁剪区域不超出图片边界
+            crop_box = (
+                max(0, x_offset),
+                max(0, y_offset),
+                min(new_width, x_offset + target_size[0]),
+                min(new_height, y_offset + target_size[1])
+            )
+            cropped = local_image.crop(crop_box)
+            # 计算粘贴位置，使图片居中
+            paste_x = (target_size[0] - cropped.width) // 2
+            paste_y = (target_size[1] - cropped.height) // 2
+            final_image.paste(cropped, (paste_x, paste_y))
+            
+            # 保存图片（根据输出路径的扩展名决定格式）
+            if output_path.lower().endswith('.png'):
+                final_image.save(output_path, "PNG")
+            else:
+                final_image.save(output_path, "JPEG", quality=95)
+            result["path"] = output_path
+            result["used_icon"] = False
+            # 如果勾选了"将SGDB游戏名称应用至本地"且已选择游戏，则保存游戏名称
+            if apply_name_var.get() and selected_game_name:
+                result["sgdb_name"] = selected_game_name
+            cover_win.destroy()
+            cover_win.quit()
+        except Exception as e:
+            messagebox.showerror("错误", f"处理本地图片失败: {e}")
+    
     entry.bind('<Return>', lambda e: do_search())
     tk.Button(search_frame, text="搜索", command=do_search).pack(side=tk.LEFT, padx=5)
+    tk.Button(search_frame, text="选择本地图片", command=select_local_image, bg="#aaaaaa").pack(side=tk.LEFT, padx=5)
     tk.Label(search_frame, text="图片加载较慢，请耐心等候").pack(side=tk.LEFT, padx=5)
+    
+    # 在同一行添加剩余游戏数量和默认封面按钮
+    if len(sys.argv) >= 4:  # 如果有传入剩余游戏数量参数
+        remaining_games = int(sys.argv[3])
+        if remaining_games > 1:
+            # 添加剩余游戏数量提示和默认封面按钮
+            tk.Label(search_frame, text=f"剩余：{remaining_games}个", font=("微软雅黑", 9)).pack(side=tk.LEFT, padx=5)
+            
+            # 添加全部使用默认封面按钮
+            def skip_all_covers():
+                msg = "确定对所有剩余游戏使用默认封面吗？\n这将关闭所有封面选择窗口。"
+                if messagebox.askyesno("确认", msg):
+                    try:
+                        # 获取当前进程ID
+                        current_pid = os.getpid()
+                        # 获取进程名称
+                        process_name = os.path.basename(sys.executable if getattr(sys, 'frozen', False) else sys.argv[0])
+                        
+                        # 使用WMIC获取所有Python进程及其父进程ID
+                        cmd = f'wmic process where name="{process_name}" get ProcessId,ParentProcessId,CommandLine /format:csv'
+                        output = subprocess.check_output(cmd, shell=True, text=True)
+                        
+                        # 解析输出
+                        lines = [line.strip() for line in output.split('\n') if line.strip()]
+                        if len(lines) > 1:  # 跳过标题行
+                            for line in lines[1:]:
+                                try:
+                                    parts = line.split(',')
+                                    if len(parts) >= 3:
+                                        cmd_line = parts[-3]  # CommandLine
+                                        if "-choosecover" in cmd_line:  # 确认是封面选择窗口
+                                            pid = int(parts[-2])  # ProcessId
+                                            if pid != current_pid:  # 不终止自己
+                                                # 强制终止进程及其子进程
+                                                subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)], 
+                                                            creationflags=subprocess.CREATE_NO_WINDOW,
+                                                            stdout=subprocess.DEVNULL, 
+                                                            stderr=subprocess.DEVNULL)
+                                except:
+                                    continue
+                        
+                        # 最后终止自己
+                        os._exit(0)
+                    except Exception as e:
+                        print(f"终止进程时出错: {e}")
+                        os._exit(0)
+                        
+            skip_button = tk.Button(search_frame, text="全部使用默认", 
+                                  command=skip_all_covers, bg="#ff9999",
+                                  font=("微软雅黑", 9))
+            skip_button.pack(side=tk.LEFT, padx=5)
+    else:
+        tk.Label(search_frame, text="关闭窗口使用默认封面", font=("微软雅黑", 9)).pack(side=tk.LEFT, padx=5)
+    
     result_listbox.bind('<Double-Button-1>', load_covers)
     do_search()
     cover_win.protocol("WM_DELETE_WINDOW", on_close)
     cover_win.title(f"SGDB封面选择 - {app_name}")
     cover_win.mainloop()
-    return result["path"], result["used_icon"]
+    return result["path"], result["used_icon"], result["sgdb_name"]
 
 def main():
     global folder_selected, onestart, close_after_completion, pseudo_sorting_enabled, lnkandurl_files
@@ -1322,12 +1606,15 @@ def main():
     # 保存更新后的 apps.json 文件
     save_apps_json(apps_json, apps_json_path)
     restart_service()
-    # 新增：统一调用-choosecover进行选择
+    # 新增：统一调用-choosecover进行选择，并传递剩余游戏数量
     if need_choose_cover_names:
         exe_path = sys.executable if getattr(sys, 'frozen', False) else sys.argv[0]
-        for name in need_choose_cover_names:
+        total_games = len(need_choose_cover_names)
+        for i, name in enumerate(need_choose_cover_names):
+            remaining_games = total_games - i
             try:
-                process = subprocess.Popen([exe_path, "-choosecover", name])
+                cmd = [exe_path, "-choosecover", name, str(remaining_games)]
+                process = subprocess.Popen(cmd)
                 process.wait()  # 等待子进程完成
             except Exception as e:
                 print(f"调用SGDB封面选择失败: {e}")
@@ -1405,11 +1692,14 @@ if __name__ == "__main__":
             elif app_entry.get("detached") and len(app_entry["detached"]) > 0:
                 exe_path = app_entry["detached"][0].strip('"')
             root.withdraw() 
-            choose_cover_with_sgdb(game_name, filename, exe_path)
+            cover_path, used_icon, sgdb_name = choose_cover_with_sgdb(game_name, filename, exe_path)
             # 如果选择了封面，更新 apps.json
             if os.path.exists(filename):
                 # 更新 apps.json
                 app_entry["image-path"] = filename.replace("\\", "/")
+                # 如果返回了SGDB游戏名称，则更新名称
+                if sgdb_name:
+                    app_entry["name"] = sgdb_name
                 save_apps_json(apps_json, apps_json_path)
         else:
             tk.messagebox.showerror("错误", f"未找到游戏名称为 {game_name} 的条目")
