@@ -126,7 +126,7 @@ def quickaddmain():
         proc_frame = tk.Frame(add_window, relief='flat')
         proc_frame.pack(fill=tk.BOTH, expand=False, padx=10, pady=(8, 0))
 
-        canvas = tk.Canvas(proc_frame, height=200)
+        canvas = tk.Canvas(proc_frame, height=220)
         scrollbar = tk.Scrollbar(proc_frame, orient=tk.VERTICAL, command=canvas.yview)
         inner = tk.Frame(canvas)
 
@@ -180,6 +180,7 @@ def quickaddmain():
                         and proc.info['name'].lower() != "explorer.exe"
                         and proc.info['name'].lower() != "desktopgame.exe"
                         and proc.info['name'].lower() != "textinputhost.exe"
+                        and proc.info['name'].lower() != "quickstreamappadd.exe"
                     ):
                         proc_list.append(proc)
                 except Exception:
