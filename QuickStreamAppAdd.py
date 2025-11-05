@@ -24,6 +24,8 @@ import win32api
 import win32con
 import win32security
 import win32process
+import win32gui
+import psutil
 import vdf
 #& C:/Users/86150/AppData/Local/Programs/Python/Python38/python.exe -m PyInstaller QuickStreamAppAdd.py -i fav.ico --uac-admin --noconsole --additional-hooks-dir=. --noconfirm
 #312 INFO: PyInstaller: 6.6.0, contrib hooks: 2024.4 Python: 3.8.5 Platform: Windows-10-10.0.22621-SP0
@@ -55,7 +57,7 @@ def quickaddmain():
     # 创建新窗口
     add_window = TkinterDnD.Tk()
     add_window.title("快速添加")
-    add_window.geometry("360x250")
+    add_window.geometry("360x280")
     add_window.attributes("-topmost", True)  # 窗口始终显示于最前端
     # 创建标签用于显示拖放区域
     drop_label = tk.Label(add_window, text="拖放文件到这里\n或点击下方按钮选择文件", 
@@ -103,12 +105,114 @@ def quickaddmain():
         if selected_file:
             process_file(selected_file)
 
-    select_button = tk.Button(add_window, text="选择文件", width=25, bg='#aaaaaa', command=select_file)
+    # 将选择文件和关闭按钮放在同一行
+    file_btn_frame = tk.Frame(add_window)
+    file_btn_frame.pack(pady=(5, 0))
+
+    select_button = tk.Button(file_btn_frame, text="选择文件", width=25, bg='#aaaaaa', command=select_file)
     select_button.pack(side=tk.LEFT, padx=5)
 
-    # 创建关闭按钮
-    close_button = tk.Button(add_window, text="关闭", width=20, bg='#aaaaaa', command=add_window.destroy)
+    # 创建关闭按钮并放在同一行
+    close_button = tk.Button(file_btn_frame, text="关闭", width=20, bg='#aaaaaa', command=add_window.destroy)
     close_button.pack(side=tk.LEFT)
+
+    # 新增：添加运行中游戏按钮（点击后隐藏自身并显示运行中进程列表）
+    def show_running_processes():
+        # 隐藏触发按钮和 drop_label
+        running_btn.pack_forget()
+        drop_label.pack_forget()
+
+        # 创建可滚动区域来显示进程列表（单独一行）
+        proc_frame = tk.Frame(add_window, relief='flat')
+        proc_frame.pack(fill=tk.BOTH, expand=False, padx=10, pady=(8, 0))
+
+        canvas = tk.Canvas(proc_frame, height=200)
+        scrollbar = tk.Scrollbar(proc_frame, orient=tk.VERTICAL, command=canvas.yview)
+        inner = tk.Frame(canvas)
+
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor='nw')
+        canvas.configure(yscrollcommand=scrollbar.set)
+        # 鼠标滚轮支持（Windows）
+        def _on_mousewheel(event):
+            # event.delta 为 120 的倍数
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        # 仅在鼠标进入 canvas/inner 时绑定全局滚轮，离开时解绑，避免影响其它控件
+        def _bind_wheel(event):
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        def _unbind_wheel(event):
+            canvas.unbind_all("<MouseWheel>")
+
+        canvas.bind("<Enter>", _bind_wheel)
+        canvas.bind("<Leave>", _unbind_wheel)
+        inner.bind("<Enter>", _bind_wheel)
+        inner.bind("<Leave>", _unbind_wheel)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # 枚举所有有前台窗口且不是隐藏的进程
+        hwnd_pid_map = {}
+        try:
+            def enum_window_callback(hwnd, lParam):
+                try:
+                    if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd):
+                        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                        hwnd_pid_map[pid] = hwnd
+                except Exception:
+                    pass
+                return True
+            win32gui.EnumWindows(enum_window_callback, None)
+        except Exception as e:
+            tk.messagebox.showerror("错误", f"枚举窗口失败: {e}")
+            return
+
+        # 收集进程信息
+        proc_list = []
+        try:
+            for proc in psutil.process_iter(['pid', 'name', 'exe']):
+                try:
+                    if (
+                        proc.info['pid'] in hwnd_pid_map
+                        and proc.info.get('exe')
+                        and proc.info.get('name')
+                        and proc.info['name'].lower() != "explorer.exe"
+                        and proc.info['name'].lower() != "desktopgame.exe"
+                        and proc.info['name'].lower() != "textinputhost.exe"
+                    ):
+                        proc_list.append(proc)
+                except Exception:
+                    continue
+        except Exception as e:
+            tk.Label(inner, text=f"无法枚举进程: {e}", fg='red').pack(padx=8, pady=8)
+
+        if not proc_list:
+            tk.Label(inner, text="没有检测到可用进程", fg='white', bg='#333333').pack(padx=8, pady=8)
+        else:
+            for proc in proc_list:
+                proc_name = proc.info.get('name', '未知')
+                proc_exe = proc.info.get('exe', '')
+                row = tk.Frame(inner)
+                row.pack(fill=tk.X, padx=4, pady=4)
+                # 文件夹选择小按钮
+                def open_file_dialog(proc_exe=proc_exe):
+                    start_dir = os.path.dirname(proc_exe) if proc_exe and os.path.exists(proc_exe) else ''
+                    file_dialog = filedialog.askopenfilename(title="手动选择要添加的游戏文件",
+                                                             filetypes=[("可执行文件", "*.exe;*.lnk")],
+                                                             initialdir=start_dir)
+                    if file_dialog:
+                        process_file(file_dialog)
+                folder_btn = tk.Button(row, text="📁", width=3, bg='#666666', fg='white', command=open_file_dialog)
+                folder_btn.pack(side=tk.LEFT, padx=(0,0))
+
+                # 进程按钮
+                btn_text = f"{proc_name} ({proc_exe})"
+                btn = tk.Button(row, text=btn_text, anchor='w', justify='left', bg='#444444', fg='white',
+                                command=(lambda exe=proc_exe: process_file(exe)))
+                btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    running_btn = tk.Button(add_window, text="添加运行中游戏", width=47, bg='#aaaaaa', command=show_running_processes)
+    running_btn.pack(pady=(5,0))
 
     # 实现拖放功能
     def on_drop(event):
@@ -517,7 +621,6 @@ def create_gui():
             url_content = f"[InternetShortcut]\nURL=steam://rungameid/{appid}\nIconFile={icon_path}\nIconIndex=0\n"
             with open(shortcut_path, 'w', encoding='utf-8') as f:
                 f.write(url_content)
-            tk.messagebox.showinfo("成功", f"已在 {folder_selected} 创建快捷方式: {shortcut_name}")
             steam_cover_window.destroy()
             runonestart()
         listbox.bind('<Double-Button-1>', on_select)
@@ -1536,8 +1639,32 @@ def main():
     apps_json = load_apps_json(apps_json_path)
 
     # 检查 target_paths 是否与 apps.json 中的条目名称相同
-    existing_names1 = {os.path.splitext(os.path.basename(entry.get('cmd', '')))[0] for entry in apps_json['apps']}  # 处理 cmd 字段
-    existing_names2 = {os.path.splitext(os.path.basename(detached_item))[0] for entry in apps_json['apps'] if 'detached' in entry for detached_item in entry['detached']}  # 处理 detached 字段
+    # 处理 cmd 字段
+    existing_names1 = set()
+    for entry in apps_json.get('apps', []):
+        cmd = entry.get('cmd')
+        if isinstance(cmd, str):
+            cmd_str = cmd.strip('"')
+            if cmd_str:
+                existing_names1.add(os.path.splitext(os.path.basename(cmd_str))[0])
+        elif isinstance(cmd, (list, tuple)) and cmd:
+            # 取列表中第一个合理的字符串元素
+            for item in cmd:
+                if isinstance(item, str) and item:
+                    item_str = item.strip('"')
+                    existing_names1.add(os.path.splitext(os.path.basename(item_str))[0])
+                    break
+        # 其他类型（如 None 或 dict）直接跳过
+
+    # 处理 detached 字段，注意 detached 通常为列表
+    existing_names2 = set()
+    for entry in apps_json.get('apps', []):
+        detached_list = entry.get('detached')
+        if isinstance(detached_list, (list, tuple)):
+            for detached_item in detached_list:
+                if isinstance(detached_item, str) and detached_item:
+                    di = detached_item.strip('"')
+                    existing_names2.add(os.path.splitext(os.path.basename(di))[0])
     modified_target_paths = []  # 确保在这里初始化
 
     for idx, target_path in enumerate(target_paths):
