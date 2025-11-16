@@ -309,8 +309,29 @@ APP_INSTALL_PATH=get_app_install_path()
 def load_apps_json(json_path):
     # 加载已有的 apps.json
     if os.path.exists(json_path):
-        with open(json_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            # 如果普通 utf-8 读取失败，尝试用带 BOM 的 utf-8-sig 读取并回写为纯 utf-8
+            try:
+                with open(json_path, "r", encoding="utf-8-sig") as f:
+                    data = json.load(f)
+                try:
+                    with open(json_path, "w", encoding="utf-8") as f:
+                        json.dump(data, f, indent=4, ensure_ascii=False)
+                except Exception as e2:
+                    print(f"保存为 utf-8 失败: {e2}")
+                return data
+            except Exception as e2:
+                print(f"读取 apps.json 失败: {e} / {e2}")
+                # 使用 Win32 API弹窗提示
+                try:
+                    msg = f"读取 apps.json 失败：\n{e}\n{e2}\n。"
+                    messagebox.showerror("读取错误",msg)
+                    sys.exit(1)
+                except Exception:
+                    pass
     else:
         # 如果文件不存在，返回一个空的基础结构
         return {"env": "", "apps": []}
@@ -372,25 +393,6 @@ def save_config():
     except Exception as e:
         print(f"保存配置文件时出错: {e}")
 
-def delete_output_images():
-    """删除 apps.json 中包含 "output_image" 的条目并重启服务"""
-    apps_json_path = f"{APP_INSTALL_PATH}\\config\\apps.json"  # 修改为你的 apps.json 文件路径
-    apps_json = load_apps_json(apps_json_path)  # 加载现有的 apps.json 文件
-
-    # 删除包含 "output_image" 的条目
-    apps_json['apps'] = [entry for entry in apps_json['apps'] if "output_image" not in entry.get("image-path", "")]
-    print("已删除包含 'output_image' 的条目")
-
-    # 保存更新后的 apps.json 文件
-    save_apps_json(apps_json, apps_json_path)
-
-    # 删除 output_image 文件夹
-    output_image_folder = f"{APP_INSTALL_PATH}\\assets\\output_image"
-    if os.path.exists(output_image_folder):
-        shutil.rmtree(output_image_folder)  # 删除文件夹及其内容
-        print(f"已删除文件夹: {output_image_folder}")
-
-    restart_service()  # 重启服务
 def get_steam_base_dir():
     """
     获取Steam的安装目录
@@ -546,9 +548,59 @@ def create_gui():
     # 开始程序按钮
     start_button = tk.Button(root, text="--点此开始程序--", command=start_button_on, width=25, height=2, bg='#333333', fg='white')  # 设置背景色为黑色，文字颜色为白色
     start_button.pack(side=tk.RIGHT, padx=(0,10), pady=3)  # 右侧对齐
+    def about_more():
+        # 自定义窗口以支持可点击的超链接
+        url = "https://github.com/gmaox/QuickStreamAppAdd"
+        win = tk.Toplevel()
+        win.title("关于 QuickStreamAppAdd")
+        win.geometry("520x240")
+        try:
+            if 'root' in globals() and root:
+                win.transient(root)
+        except:
+            pass
+        win.resizable(False, False)
 
-    # 删除所有 output_image 条目的按钮
-    delete_button = tk.Button(root, text="删除生成的\nsunshine应用", command=delete_output_images, width=10, height=2, bg='#aaaaaa', fg='white')  # 设置背景色为黑色，文字颜色为白色
+        txt = (
+            "QuickStreamAppAdd (QSAA) 是一个辅助工具，旨在简化将应用程序和游戏添加到 Sunshine 的过程。\n"
+            "主要功能包括：\n"
+            "1. 快速添加本地可执行文件的快捷方式。\n"
+            "2. 检测并添加已安装的 Steam 游戏。\n"
+            "3. 支持拖放文件添加\n"
+            "4. 运行中游戏的快速添加\n\n"
+            "更多功能开发中，项目开源地址："
+        )
+        lbl = tk.Label(win, text=txt, justify="left", anchor="nw", wraplength=500)
+        lbl.pack(padx=12, pady=(12, 6), fill=tk.BOTH)
+
+        # 可点击的链接标签
+        link = tk.Label(win, text=url, fg="blue", cursor="hand2", wraplength=500)
+        try:
+            link.config(font=(None, 9, "underline"))
+        except Exception:
+            pass
+        link.pack(padx=12, pady=(0, 12), anchor="w")
+
+        def open_link(event=None):
+            try:
+                webbrowser.open(url)
+            except Exception:
+                messagebox.showinfo("提示", f"无法打开链接，请手动访问：\n{url}")
+
+        # 鼠标效果
+        def on_enter(e):
+            link.config(fg="#0000ee")
+        def on_leave(e):
+            link.config(fg="blue")
+
+        link.bind("<Button-1>", open_link)
+        link.bind("<Enter>", on_enter)
+        link.bind("<Leave>", on_leave)
+        # 将窗口置顶并聚焦
+        win.attributes("-topmost", True)
+        win.after(200, lambda: win.attributes("-topmost", False))
+        win.focus_force()
+    delete_button = tk.Button(root, text="关于＆\n更多功能", command=about_more, width=10, height=2, bg='#aaaaaa', fg='white')  # 设置背景色为黑色，文字颜色为白色
     delete_button.pack(side=tk.RIGHT, padx=0, pady=(3, 3))  # 上边距为0，下边距为10
 
     def add_steamgame_window():
@@ -691,8 +743,6 @@ def create_gui():
         exclude_btn.pack(side=tk.LEFT, padx=5)
         import_btn = tk.Button(btn_row, text="导入全部游戏", command=import_all_games, width=20, bg='#aaaaaa')
         import_btn.pack(side=tk.LEFT)
-        label = tk.Label(steam_cover_window, text="开源地址：https://github.com/gmaox/QuickStreamAppAdd")
-        label.pack(pady=5)
 
     steam_cover_button = tk.Button(root, text="从本地steam库\n加入游戏", command=add_steamgame_window, width=13, height=2, bg='#aaaaaa', fg='white')  # 设置背景色为黑色，文字颜色为白色
     steam_cover_button.pack(side=tk.RIGHT, padx=0, pady=(3, 3))  # 上边距为0，下边距为10
@@ -922,7 +972,7 @@ def create_gui():
                 cover_path, used_icon, sgdb_name = choose_cover_with_sgdb(game_name, filename, exe_path)
                 # 如果选择了封面，更新 apps.json
                 if os.path.exists(filename):
-                    app_entry["image-path"] = filename.replace("\\", "/")
+                    app_entry["image-path"] = os.path.basename(filename)
                     # 如果返回了SGDB游戏名称，则更新名称
                     if sgdb_name:
                         app_entry["name"] = sgdb_name
@@ -1073,7 +1123,7 @@ def generate_app_entry(lnk_file, index):
             "wait-all": "true",
             "exit-timeout": "5",
             "menu-cmd": "",
-            "image-path": f"{APP_INSTALL_PATH}\\assets\\output_image\\output_image{index}.png",
+            "image-path": f"output_image{index}.png",
             "detached": [
                 f"\"{os.path.abspath(lnk_file)}\""
             ]
@@ -1090,7 +1140,7 @@ def generate_app_entry(lnk_file, index):
             "wait-all": "true",
             "exit-timeout": "5",
             "menu-cmd": "",
-            "image-path": f"{APP_INSTALL_PATH}\\assets\\output_image\\output_image{index}.png",
+            "image-path": f"output_image{index}.png",
         }
     return entry
 
@@ -1626,11 +1676,11 @@ def main():
     lnkandurl_files = lnk_files + [url[0] for url in url_files]
 
     # 确保目标文件夹存在
-    output_folder = f"{APP_INSTALL_PATH}\\assets\\output_image"  # 更改为适当的文件夹
+    output_folder = f"{APP_INSTALL_PATH}\\config\\covers"  # 更改为适当的文件夹
 
     # 加载现有的 apps.json 文件
     apps_json_path = f"{APP_INSTALL_PATH}\\config\\apps.json"  # 修改为你的 apps.json 文件路径
-    print(f"该应用会创建《{output_folder}》文件夹来存放输出的图像\n修改以下文件《{apps_json_path}》来添加sunshine应用程序")
+    print(f"该应用会使用《{output_folder}》文件夹来存放输出的图像\n修改以下文件《{apps_json_path}》来添加sunshine应用程序")
     if onestart:
         onestart = False
         return
@@ -1775,9 +1825,9 @@ def try_set_steam_cover_for_shortcut(app_name, target_path, output_dir, index):
     steam_base_dir = get_steam_base_dir()
     if not steam_base_dir:
         return None
-    image_path = f"{steam_base_dir}/appcache/librarycache/{steamid}_library_600x900.jpg"
+    image_path = f"{steam_base_dir}/appcache/librarycache/{steamid}/library_600x900.jpg"
     if not os.path.exists(image_path):
-        image_path = f"{steam_base_dir}/appcache/librarycache/{steamid}_library_600x900_schinese.jpg"
+        image_path = f"{steam_base_dir}/appcache/librarycache/{steamid}/library_600x900_schinese.jpg"
         if not os.path.exists(image_path):
             return None
     # 拷贝图片到 output_dir，文件名采用统一索引方式
@@ -1824,7 +1874,7 @@ if __name__ == "__main__":
             # 如果选择了封面，更新 apps.json
             if os.path.exists(filename):
                 # 更新 apps.json
-                app_entry["image-path"] = filename.replace("\\", "/")
+                app_entry["image-path"] = os.path.basename(filename)
                 # 如果返回了SGDB游戏名称，则更新名称
                 if sgdb_name:
                     app_entry["name"] = sgdb_name
