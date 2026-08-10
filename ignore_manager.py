@@ -2,6 +2,31 @@ import os
 import json
 from PyQt5 import QtCore, QtGui, QtWidgets
 from basic_def import config, save_config
+from main import find_main_window
+
+
+def _cc(widget, card_type, title, message, on_result=None, yes_text=None, no_text=None, default_yes=False):
+    """通过父级 MainWindow 的 confirm_card 统一显示卡片。"""
+    mw = find_main_window(widget)
+    if mw is not None:
+        return mw.confirm_card(card_type, title, message, yes_text=yes_text, no_text=no_text,
+                              default_yes=default_yes, on_result=on_result)
+    # 找不到主窗口时回退到 QMessageBox（非嵌入）
+    if card_type == 'question':
+        from PyQt5.QtWidgets import QMessageBox
+        reply = QMessageBox.question(widget, title, message, QMessageBox.Yes | QMessageBox.No,
+                                     QMessageBox.Yes if default_yes else QMessageBox.No)
+        if on_result:
+            on_result(reply == QMessageBox.Yes)
+        return None
+    else:
+        from PyQt5.QtWidgets import QMessageBox
+        fn = {'information': QMessageBox.information, 'warning': QMessageBox.warning,
+              'critical': QMessageBox.critical}.get(card_type, QMessageBox.information)
+        fn(widget, title, message)
+        if on_result:
+            on_result(True)
+        return None
 
 
 class IgnoreManager(QtWidgets.QWidget):
@@ -93,7 +118,7 @@ class IgnoreManager(QtWidgets.QWidget):
         # 检查是否已存在
         for app in self.ignored_apps:
             if app.get('path') == file_path:
-                QtWidgets.QMessageBox.information(self, self.tr("提示"), self.tr("该应用已在忽略列表中"))
+                _cc(self, 'information', self.tr("提示"), self.tr("该应用已在忽略列表中"))
                 return
 
         # 添加到列表
@@ -104,21 +129,18 @@ class IgnoreManager(QtWidgets.QWidget):
 
         self._save_config()
         self._refresh_list()
-        QtWidgets.QMessageBox.information(self, self.tr("成功"), self.tr('已添加 "%1" 到忽略列表').replace('%1', app_name))
+        _cc(self, 'information', self.tr("成功"),
+            self.tr('已添加 "%1" 到忽略列表').replace('%1', app_name))
 
     def _remove_selected(self):
         selected_items = self.list_widget.selectedItems()
         if not selected_items:
-            QtWidgets.QMessageBox.information(self, self.tr("提示"), self.tr("请先选择要删除的项目"))
+            _cc(self, 'information', self.tr("提示"), self.tr("请先选择要删除的项目"))
             return
 
-        reply = QtWidgets.QMessageBox.question(
-            self, self.tr("确认删除"),
-            self.tr("确定要删除选中的 %1 个项目吗？").replace('%1', str(len(selected_items))),
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
-        )
-
-        if reply == QtWidgets.QMessageBox.Yes:
+        def _do_remove(yes):
+            if not yes:
+                return
             for item in selected_items:
                 app_data = item.data(QtCore.Qt.UserRole)
                 if app_data in self.ignored_apps:
@@ -127,21 +149,24 @@ class IgnoreManager(QtWidgets.QWidget):
             self._save_config()
             self._refresh_list()
 
+        _cc(self, 'question', self.tr("确认删除"),
+            self.tr("确定要删除选中的 %1 个项目吗？").replace('%1', str(len(selected_items))),
+            on_result=_do_remove)
+
     def _clear_all(self):
         if not self.ignored_apps:
-            QtWidgets.QMessageBox.information(self, self.tr("提示"), self.tr("忽略列表为空"))
+            _cc(self, 'information', self.tr("提示"), self.tr("忽略列表为空"))
             return
 
-        reply = QtWidgets.QMessageBox.question(
-            self, self.tr("确认清空"),
-            self.tr("确定要清空整个忽略列表吗？"),
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
-        )
-
-        if reply == QtWidgets.QMessageBox.Yes:
+        def _do_clear(yes):
+            if not yes:
+                return
             self.ignored_apps.clear()
             self._save_config()
             self._refresh_list()
+
+        _cc(self, 'question', self.tr("确认清空"),
+            self.tr("确定要清空整个忽略列表吗？"), on_result=_do_clear)
 
     def _save_config(self):
         ignored_apps_str = json.dumps(self.ignored_apps, ensure_ascii=False)

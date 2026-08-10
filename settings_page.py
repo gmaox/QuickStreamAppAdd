@@ -117,6 +117,26 @@ class SettingsPage(QWidget):
         auto_save_layout.addWidget(self.auto_save_checkbox)
         auto_save_layout.addStretch()
         settings_layout.addLayout(auto_save_layout)
+
+        # 应用 SGDB 游戏名称（run 后扫描器处理封面时）
+        apply_sgdb_name_layout = QHBoxLayout()
+        apply_sgdb_name_label = QLabel(self.tr("自动应用 SGDB 游戏名称："))
+        apply_sgdb_name_label.setFont(QFont("Segoe UI", 12))
+        self.apply_sgdb_name_checkbox = QCheckBox()
+        self.apply_sgdb_name_checkbox.setChecked(basic_def.apply_sgdb_name)
+        self.apply_sgdb_name_checkbox.setStyleSheet("")
+        apply_sgdb_name_layout.addWidget(apply_sgdb_name_label)
+        apply_sgdb_name_layout.addWidget(self.apply_sgdb_name_checkbox)
+        apply_sgdb_name_layout.addStretch()
+        settings_layout.addLayout(apply_sgdb_name_layout)
+
+        apply_sgdb_name_hint = QLabel(
+            self.tr("开启后，运行 run 解析游戏时若 SGDB 命中封面，将自动用 SGDB 的游戏名称覆盖本地名称。")
+        )
+        apply_sgdb_name_hint.setFont(QFont("Segoe UI", 10))
+        apply_sgdb_name_hint.setWordWrap(True)
+        apply_sgdb_name_hint.setStyleSheet("color: #888888;")
+        settings_layout.addWidget(apply_sgdb_name_hint)
         # # 3. 自动删除不在工作目录中的条目（默认关闭）（不希望用户误删条目，所以隐藏未经测试的开关）
         # orphan_cleanup_layout = QHBoxLayout()
         # orphan_cleanup_label = QLabel("自动删除孤立条目：")
@@ -142,6 +162,7 @@ class SettingsPage(QWidget):
         self.work_path_input = QLineEdit()
         self.work_path_input.setPlaceholderText(self.tr("选择工作路径..."))
         self.work_path_input.setReadOnly(True)
+        self.work_path_input.setFocusPolicy(Qt.NoFocus)
         self.work_path_input.setStyleSheet("QLineEdit { border: none; padding:6px; }")
         # 显示当前配置中的工作路径
         try:
@@ -153,8 +174,9 @@ class SettingsPage(QWidget):
         work_path_open_btn.setFixedWidth(50)
         work_path_open_btn.setFixedHeight(34)
         work_path_open_btn.setStyleSheet(
-            "QPushButton{ background-color:#2E7D9B; color:white; border:none; border-radius:6px; padding:0px;}"
+            "QPushButton{ background-color:#2E7D9B; color:white; border:2px solid transparent; border-radius:6px; padding:0px;}"
             "QPushButton:hover{ background-color:#256070;}"
+            "QPushButton:focus{ background-color:#66ccff; color:#003344; border:2px solid #ffffff;}"
         )
         work_path_open_btn.clicked.connect(self.on_open_work_path)
         self.work_path_open_btn = work_path_open_btn
@@ -162,8 +184,9 @@ class SettingsPage(QWidget):
         work_path_btn.setFixedWidth(100)
         work_path_btn.setFixedHeight(34)
         work_path_btn.setStyleSheet(
-            "QPushButton{ background-color:#2E7D9B; color:white; border:none; border-radius:6px; padding:6px 12px;}"
+            "QPushButton{ background-color:#2E7D9B; color:white; border:2px solid transparent; border-radius:6px; padding:6px 12px;}"
             "QPushButton:hover{ background-color:#256070;}"
+            "QPushButton:focus{ background-color:#66ccff; color:#003344; border:2px solid #ffffff;}"
         )
         # 创建按钮布局，减小按钮间距
         work_path_buttons_layout = QHBoxLayout()
@@ -184,6 +207,7 @@ class SettingsPage(QWidget):
         self.config_path_input = QLineEdit()
         self.config_path_input.setPlaceholderText(self.tr("选择配置文件..."))
         self.config_path_input.setReadOnly(True)
+        self.config_path_input.setFocusPolicy(Qt.NoFocus)
         self.config_path_input.setStyleSheet("QLineEdit { border: none; padding:6px; }")
         # 显示当前 config.ini 路径
         try:
@@ -334,6 +358,10 @@ class SettingsPage(QWidget):
         except Exception:
             pass
         try:
+            self.apply_sgdb_name_checkbox.stateChanged.connect(self.on_apply_sgdb_name_changed)
+        except Exception:
+            pass
+        try:
             self.work_path_btn.clicked.connect(self.on_browse_work_path)
         except Exception:
             pass
@@ -381,6 +409,13 @@ class SettingsPage(QWidget):
             basic_def.save_config()
         except Exception as e:
             print(f"保存 image_path_use_relative 失败: {e}")
+
+    def on_apply_sgdb_name_changed(self, state):
+        try:
+            basic_def.apply_sgdb_name = bool(state)
+            basic_def.save_config()
+        except Exception as e:
+            print(f"保存 apply_sgdb_name 失败: {e}")
 
     def on_browse_work_path(self):
         try:

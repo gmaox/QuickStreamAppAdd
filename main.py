@@ -100,16 +100,41 @@ if __name__ == "__main__" and ("--choosecover" in sys.argv or "--delete" in sys.
 
     sys.exit(0 if ok else 1)
 
-from PyQt5.QtGui import QFont, QColor, QTextCursor, QTextCharFormat
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve, QRect, QParallelAnimationGroup, QTranslator, QLocale
+from PyQt5.QtGui import QFont, QColor, QTextCursor, QTextCharFormat, QKeyEvent
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve, QRect, QParallelAnimationGroup, QTranslator, QLocale, QEvent
+from PyQt5 import QtCore
 from io import StringIO
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel,
     QHBoxLayout, QStackedWidget, QPushButton, QButtonGroup, QSizePolicy,
-    QTextEdit
+    QTextEdit, QAbstractButton, QComboBox, QDialog, QListWidget,
+    QTableWidget, QAbstractItemView, QScrollArea, QFrame, QLineEdit
 )
-from basic_def import initialize, load_config, _process_confirm_add_entries
+from basic_def import initialize, load_config, _process_confirm_add_entries, ConfirmCard
+
+
+def find_main_window(widget):
+    """向上查找包含 confirm_card() 的 MainWindow。"""
+    w = widget
+    while w is not None:
+        if hasattr(w, 'confirm_card') and callable(getattr(w, 'confirm_card', None)):
+            return w
+        w = w.parent()
+    return None
+
+# 手柄支持（可选模块，加载失败时退化为不可用）
+try:
+    from gamepad import (
+        GamepadManager,
+        SDL_CONTROLLER_BUTTON_A,
+        SDL_CONTROLLER_BUTTON_B,
+    )
+    _GAMEPAD_AVAILABLE = True
+except Exception as _e:
+    print(f"[Main] 手柄模块加载失败，手柄支持将被禁用: {_e}")
+    _GAMEPAD_AVAILABLE = False
+    GamepadManager = None
 # 嵌入管理界面 (确保 manage_games_pyqt.py 与本文件位于同一目录)
 try:
     from manage_games import ManageWindow
@@ -142,14 +167,9 @@ except Exception:
 
 # 嵌入扫描器界面
 try:
-    from scanner_add_page import ScannerAddPage
+    from scanner_page import ScannerPage
 except Exception:
-    ScannerAddPage = None
-
-try:
-    from scanner_manage_page import ScannerManagePage
-except Exception:
-    ScannerManagePage = None
+    ScannerPage = None
 
 
 # 日志信号发射器
@@ -506,12 +526,14 @@ class MainWindow(QMainWindow):
         self.translator = QTranslator()
         self._apply_language(basic_def.language)
 
-        self.setWindowTitle("Sunshine App Manager v1.2")
-        self.resize(900, 480)
+        self.setWindowTitle("Sunshine App Manager v1.3")
+        # 手柄激活标志：未操作手柄前不显示焦点高亮
+        self._gamepad_active = False
+        self.resize(1080, 480)
 
         tab_names = [
             self.tr('添加游戏'), self.tr('浏览游戏'), self.tr('日志'), self.tr('设置'),
-            self.tr('忽略列表'), self.tr('添加扫描器'), self.tr('扫描器管理')
+            self.tr('忽略列表'), self.tr('扫描器')
         ]
 
         # 设置全局字体为微软雅黑
@@ -537,6 +559,10 @@ class MainWindow(QMainWindow):
 
         button_group = QButtonGroup(self)
         button_group.setExclusive(True)
+        # 保存为实例属性，供手柄导航使用
+        self.button_group = button_group
+        self.sidebar_count = len(tab_names)
+        self.sidebar_index = 0  # 当前侧栏选中索引（手柄导航用）
 
         # 右侧页面区 (堆栈)
         self.stacked = QStackedWidget()
@@ -545,6 +571,11 @@ class MainWindow(QMainWindow):
 
         self.confirm_add_window = None  # 确认添加窗口引用
         self.confirm_add_page_index = None  # 确认添加窗口页面索引
+        self._sgdb_cover_widget = None  # 内嵌 SGDB 封面选择器引用
+        self._sgdb_cover_page_index = None  # 内嵌 SGDB 封面选择器页面索引
+        self._sgdb_cover_prev_index = None  # 打开封面选择器前的页面索引
+        self._sgdb_cover_callback = None  # 封面选择完成回调
+        self._modal_confirm_cards = []  # 显示中的确认卡片栈（支持嵌套）
         
         for i, name in enumerate(tab_names):
             # 页面
@@ -581,16 +612,11 @@ class MainWindow(QMainWindow):
                 ignore_widget = IgnoreManager()
                 ignore_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
                 v.addWidget(ignore_widget)
-            elif i == 5 and ScannerAddPage is not None:
-                # 添加扫描器标签页
-                scanner_add_widget = ScannerAddPage()
-                scanner_add_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-                v.addWidget(scanner_add_widget)
-            elif i == 6 and ScannerManagePage is not None:
-                # 扫描器管理标签页
-                scanner_manage_widget = ScannerManagePage()
-                scanner_manage_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-                v.addWidget(scanner_manage_widget)
+            elif i == 5 and ScannerPage is not None:
+                # 扫描器标签页（左列表 + 右详情面板）
+                scanner_widget = ScannerPage()
+                scanner_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+                v.addWidget(scanner_widget)
             else:
                 # 其他标签页 - 显示占位符
                 label = QLabel(self.tr("这是标签页%1的内容").replace('%1', str(i+1)))
@@ -622,6 +648,11 @@ class MainWindow(QMainWindow):
         # 按钮切换处理
         def on_button_clicked(id_):
             self.stacked.setCurrentIndex(id_)
+            # 同步手柄导航使用的侧栏索引（鼠标/键盘点击时也要更新）
+            try:
+                self.sidebar_index = int(id_)
+            except Exception:
+                pass
 
         button_group.idClicked.connect(on_button_clicked)
 
@@ -632,7 +663,615 @@ class MainWindow(QMainWindow):
 
         # 应用初始主题
         self.apply_theme(basic_def.theme)
-    
+
+        # 初始化手柄支持
+        self._init_gamepad()
+
+        # 启动时清除焦点，避免出现初始高亮控件（等待用户操作手柄后再激活）
+        self.setFocus()
+
+    # ------------------------------------------------------------------
+    # 手柄支持（仅使用方向键 + A + B）
+    #   方向键：在屏幕控件间移动焦点（空间导航 + 列表/表格内部导航）
+    #   A 键：  点击控件 / 进入下级（侧栏按钮进入页面，列表项激活等）
+    #   B 键：  返回上级（关闭对话框 / 页面内容返回侧栏）
+    # ------------------------------------------------------------------
+    def _init_gamepad(self):
+        """初始化手柄管理器并启动轮询定时器。"""
+        self.gamepad = None
+        self._gamepad_timer = None
+        if not _GAMEPAD_AVAILABLE:
+            return
+        try:
+            self.gamepad = GamepadManager()
+        except Exception as e:
+            print(f"[Main] GamepadManager 初始化失败: {e}")
+            self.gamepad = None
+            return
+        if not self.gamepad.available:
+            print("[Main] 手柄支持不可用（SDL2.dll 未加载成功）")
+            return
+        self._gamepad_timer = QTimer(self)
+        self._gamepad_timer.timeout.connect(self._poll_gamepad)
+        self._gamepad_timer.start(50)
+        # 程序启动时不设置焦点，等手柄操作后再高亮
+
+    def _poll_gamepad(self):
+        """轮询手柄输入，转换为焦点导航 / 激活 / 返回动作。"""
+        gp = getattr(self, "gamepad", None)
+        if gp is None or not gp.available:
+            return
+        try:
+            btn_pressed, _btn_released, dir_events = gp.poll()
+        except Exception:
+            return
+
+        # 仅处理首个手柄
+        if btn_pressed:
+            btn_pressed = [(idx, btn) for idx, btn in btn_pressed if idx == 0]
+        if dir_events:
+            dir_events = [(idx, ev) for idx, ev in dir_events if idx == 0]
+        if not btn_pressed and not dir_events:
+            return
+
+        # 首次手柄操作：激活焦点高亮，并将焦点设到当前侧栏按钮
+        if not self._gamepad_active:
+            self._gamepad_active = True
+            import basic_def
+            self.apply_theme(basic_def.theme)
+            self._focus_sidebar_current()
+
+        # ---- 方向事件 → 焦点移动 ----
+        for _idx, ev in dir_events:
+            base = ev
+            if base.startswith('FIRST-'):
+                base = base[len('FIRST-'):]
+            elif base.endswith('_EDGE'):
+                base = base[:-len('_EDGE')]
+            if base in ('UP', 'DOWN', 'LEFT', 'RIGHT'):
+                self._move_focus(base)
+
+        # ---- A / B 按钮 ----
+        for _idx, btn in btn_pressed:
+            if btn == SDL_CONTROLLER_BUTTON_A:
+                self._activate_focused()
+            elif btn == SDL_CONTROLLER_BUTTON_B:
+                self._go_back()
+
+    # ---- 焦点空间导航 ----
+
+    _DIR_KEY_MAP = {
+        'UP': Qt.Key_Up,
+        'DOWN': Qt.Key_Down,
+        'LEFT': Qt.Key_Left,
+        'RIGHT': Qt.Key_Right,
+    }
+
+    def _move_focus(self, direction):
+        """在指定方向上移动焦点。"""
+        focus = QApplication.focusWidget()
+        if focus is None:
+            self._focus_sidebar_current()
+            return
+
+        # 确认卡片栈存在时，导航限制在最顶层卡片内的按钮间
+        if self._modal_confirm_cards:
+            self._move_focus_spatial(direction)
+            return
+
+        # 列表项内子控件（如扫描结果的「忽略」按钮）：左右进出、上下项间移动
+        if not isinstance(focus, QListWidget):
+            list_parent = self._find_parent_listwidget(focus)
+            if list_parent is not None:
+                if direction == 'LEFT':
+                    # 回到列表本身，保持当前项选择
+                    list_parent.setFocus()
+                    return
+                if direction in ('UP', 'DOWN'):
+                    if self._move_to_sibling_item_button(list_parent, focus, direction):
+                        return
+                    # 到边缘了，跳出列表
+                    self._move_focus_spatial(direction)
+                    return
+                # RIGHT：跳出列表到下一个控件
+                self._move_focus_spatial(direction)
+                return
+
+        # QScrollArea viewport / QFrame 等容器获得焦点时，方向键会被用于滚动
+        # 直接跳到空间导航，找到真正的可交互控件
+        if isinstance(focus, QScrollArea) or self._is_scrollarea_viewport(focus):
+            self._move_focus_spatial(direction)
+            return
+
+        # QComboBox 本身不发送方向键（避免被困住），用 A 键打开弹出列表选择
+        if isinstance(focus, QComboBox):
+            self._move_focus_spatial(direction)
+            return
+
+        # 按钮类（QPushButton/QCheckBox）：直接空间导航
+        # QPushButton 默认会接受方向键并按 Tab 链移动焦点，不符合空间方向预期
+        if isinstance(focus, QAbstractButton):
+            self._move_focus_spatial(direction)
+            return
+
+        # QListWidget：在边缘时跳出，否则内部移动
+        if isinstance(focus, QListWidget):
+            if not self._list_can_move(focus, direction):
+                # RIGHT：尝试进入当前项内的按钮（如忽略按钮）
+                if direction == 'RIGHT' and self._focus_current_item_button(focus):
+                    return
+                self._move_focus_spatial(direction)
+                return
+        # QTableWidget：在边缘时跳出，否则内部移动
+        elif isinstance(focus, QTableWidget):
+            if not self._table_can_move(focus, direction):
+                self._move_focus_spatial(direction)
+                return
+
+        # QLineEdit：左右方向键在光标已到边缘时跳出（手柄导航到旁边按钮，如“模板/浏览”）
+        if isinstance(focus, QLineEdit):
+            if direction == 'LEFT' and focus.cursorPosition() == 0:
+                self._move_focus_spatial(direction)
+                return
+            if direction == 'RIGHT' and focus.cursorPosition() == len(focus.text()):
+                self._move_focus_spatial(direction)
+                return
+
+        # 先将方向键发送给控件（列表/表格内部导航、文本编辑光标移动等）
+        key = self._DIR_KEY_MAP.get(direction)
+        if key is not None:
+            event = QKeyEvent(QEvent.KeyPress, key, Qt.NoModifier)
+            QApplication.sendEvent(focus, event)
+            if event.isAccepted():
+                self._ensure_visible(focus)
+                return
+
+        # 控件未处理 → 空间导航
+        self._move_focus_spatial(direction)
+
+    def _move_focus_spatial(self, direction):
+        """空间导航：在指定方向上找最近的可聚焦控件并聚焦。"""
+        focus = QApplication.focusWidget()
+        if focus is None:
+            self._focus_sidebar_current()
+            return
+
+        cur_rect = QRect(focus.mapToGlobal(focus.rect().topLeft()), focus.size())
+        # 使用焦点控件所在的窗口（而非 activeWindow），确保 Popup 弹窗内的控件也能被导航
+        active_win = focus.window() or QApplication.activeWindow() or self
+
+        best_widget = None
+        best_score = None
+
+        for w in QApplication.allWidgets():
+            if w is focus:
+                continue
+            if not w.isVisible() or not w.isEnabled():
+                continue
+            if w.focusPolicy() == Qt.NoFocus:
+                continue
+            # 排除 QScrollArea 及其 viewport（方向键会被用于滚动而非导航）
+            if isinstance(w, QScrollArea) or self._is_scrollarea_viewport(w):
+                continue
+            # 排除纯 QFrame 容器（非交互控件），但保留 QListWidget/QTableWidget 等子类
+            if type(w) is QFrame:
+                continue
+            # 必须属于当前活动窗口
+            if not active_win.isAncestorOf(w) and w is not active_win:
+                continue
+
+            w_rect = QRect(w.mapToGlobal(w.rect().topLeft()), w.size())
+            score = self._directional_score(cur_rect, w_rect, direction)
+            if score is None:
+                continue
+            if best_score is None or score < best_score:
+                best_score = score
+                best_widget = w
+
+        if best_widget is not None:
+            best_widget.setFocus()
+            self._ensure_visible(best_widget)
+
+    @staticmethod
+    def _directional_score(cur, target, direction):
+        """计算从 cur 到 target 在指定方向上的距离分数。返回 None 表示不在该方向。"""
+        if direction == 'UP':
+            if target.bottom() > cur.top():
+                return None
+            perp = MainWindow._perp_dist(cur, target, True)
+            para = cur.top() - target.bottom()
+        elif direction == 'DOWN':
+            if target.top() < cur.bottom():
+                return None
+            perp = MainWindow._perp_dist(cur, target, True)
+            para = target.top() - cur.bottom()
+        elif direction == 'LEFT':
+            if target.right() > cur.left():
+                return None
+            perp = MainWindow._perp_dist(cur, target, False)
+            para = cur.left() - target.right()
+        elif direction == 'RIGHT':
+            if target.left() < cur.right():
+                return None
+            perp = MainWindow._perp_dist(cur, target, False)
+            para = target.left() - cur.right()
+        else:
+            return None
+        # 垂直对齐权重更高（×3），优先选择对齐的控件
+        return perp * 3 + para
+
+    @staticmethod
+    def _perp_dist(cur, target, horizontal):
+        """计算两矩形在垂直轴上的偏移距离。"""
+        if horizontal:
+            overlap = min(cur.right(), target.right()) - max(cur.left(), target.left())
+            if overlap > 0:
+                return 0
+            return max(cur.left(), target.left()) - min(cur.right(), target.right())
+        else:
+            overlap = min(cur.bottom(), target.bottom()) - max(cur.top(), target.top())
+            if overlap > 0:
+                return 0
+            return max(cur.top(), target.top()) - min(cur.bottom(), target.bottom())
+
+    def _ensure_visible(self, widget):
+        """确保控件在滚动区域内可见。"""
+        parent = widget.parentWidget()
+        while parent is not None:
+            if isinstance(parent, QScrollArea):
+                parent.ensureWidgetVisible(widget)
+                break
+            parent = parent.parentWidget()
+
+    @staticmethod
+    def _is_scrollarea_viewport(widget):
+        """判断控件是否是 QScrollArea 的 viewport。"""
+        p = widget.parentWidget()
+        if p is not None and isinstance(p, QScrollArea):
+            return p.viewport() is widget
+        return False
+
+    @staticmethod
+    def _list_can_move(lst, direction):
+        """QListWidget 在指定方向上是否还有可移动的项。"""
+        row = lst.currentRow()
+        if direction == 'UP':
+            return row > 0
+        elif direction == 'DOWN':
+            return row < lst.count() - 1
+        return False  # LEFT/RIGHT → 跳出列表
+
+    @staticmethod
+    def _table_can_move(tbl, direction):
+        """QTableWidget 在指定方向上是否还有可移动的单元格。"""
+        r, c = tbl.currentRow(), tbl.currentColumn()
+        if direction == 'UP':
+            return r > 0
+        elif direction == 'DOWN':
+            return r < tbl.rowCount() - 1
+        elif direction == 'LEFT':
+            return c > 0
+        elif direction == 'RIGHT':
+            return c < tbl.columnCount() - 1
+        return False
+
+    # ---- 列表项内子控件导航（如扫描结果的「忽略」按钮）----
+
+    @staticmethod
+    def _find_parent_listwidget(widget):
+        """向上查找控件所属的 QListWidget（若控件本身就在某个列表项 widget 内）。"""
+        p = widget.parentWidget()
+        while p is not None:
+            if isinstance(p, QListWidget):
+                return p
+            p = p.parentWidget()
+        return None
+
+    @staticmethod
+    def _find_item_row_for_widget(lst, widget):
+        """找到 widget 所属列表项的 row，找不到返回 None。"""
+        for i in range(lst.count()):
+            item = lst.item(i)
+            w = lst.itemWidget(item)
+            if w is None:
+                continue
+            if w is widget or w.isAncestorOf(widget):
+                return i
+        return None
+
+    @staticmethod
+    def _first_focusable_button_in_item(lst, row):
+        """返回指定列表项 itemWidget 内第一个可聚焦的按钮控件，找不到返回 None。"""
+        item = lst.item(row)
+        if item is None:
+            return None
+        w = lst.itemWidget(item)
+        if w is None:
+            return None
+        # 优先找按钮类
+        for child in w.findChildren(QAbstractButton):
+            if child.isVisible() and child.isEnabled() and child.focusPolicy() != Qt.NoFocus:
+                return child
+        return None
+
+    def _focus_current_item_button(self, lst):
+        """聚焦当前列表项 itemWidget 内的第一个可聚焦按钮，成功返回 True。"""
+        row = lst.currentRow()
+        if row < 0:
+            return False
+        btn = self._first_focusable_button_in_item(lst, row)
+        if btn is None:
+            return False
+        btn.setFocus()
+        return True
+
+    def _move_to_sibling_item_button(self, lst, current_btn, direction):
+        """移动到相邻列表项的同位置按钮，成功返回 True。"""
+        row = self._find_item_row_for_widget(lst, current_btn)
+        if row is None:
+            return False
+        if direction == 'UP' and row > 0:
+            target_row = row - 1
+        elif direction == 'DOWN' and row < lst.count() - 1:
+            target_row = row + 1
+        else:
+            return False
+        btn = self._first_focusable_button_in_item(lst, target_row)
+        if btn is None:
+            return False
+        lst.setCurrentRow(target_row)
+        btn.setFocus()
+        return True
+
+    # ---- A 键：激活 ----
+
+    def _activate_focused(self):
+        """激活（点击 / 进入）当前焦点控件。"""
+        focus = QApplication.focusWidget()
+        if focus is None:
+            return
+
+        # 侧栏按钮：点击切换页面，然后进入页面内容
+        if self.sidebar.isAncestorOf(focus):
+            focus.click()
+            QTimer.singleShot(0, self._focus_first_in_page)
+            return
+
+        # 按钮类（QPushButton / QCheckBox）：点击
+        if isinstance(focus, QAbstractButton):
+            focus.click()
+        # 组合框：弹出下拉列表
+        elif isinstance(focus, QComboBox):
+            focus.showPopup()
+        # 列表：发送 Return 激活当前项（等效双击）
+        elif isinstance(focus, QListWidget):
+            self._send_key(focus, Qt.Key_Return)
+        # 表格：发送 Return 激活当前项
+        elif isinstance(focus, QTableWidget):
+            self._send_key(focus, Qt.Key_Return)
+        else:
+            self._send_key(focus, Qt.Key_Return)
+
+    # ---- B 键：返回上级 ----
+
+    def _go_back(self):
+        """返回上级：关闭弹出列表 / 关闭对话框 / 页面内容返回侧栏。"""
+        focus = QApplication.focusWidget()
+
+        # 0) 有确认卡片在栈中 → B 键关闭最顶层卡片（取消）
+        if self._modal_confirm_cards:
+            top = self._modal_confirm_cards[-1]
+            try:
+                if hasattr(top, 'close_card'):
+                    top.close_card()
+                else:
+                    top._finish(False)
+            except Exception:
+                pass
+            return
+
+        # 1) 焦点在 QComboBox 弹出列表上 → 关闭弹出
+        if focus is not None and isinstance(focus, QAbstractItemView):
+            p = focus.parentWidget()
+            while p is not None:
+                if isinstance(p, QComboBox):
+                    p.hidePopup()
+                    return
+                p = p.parentWidget()
+
+        # 2) 焦点所在窗口是弹出对话框/浮窗 → 关闭它
+        #    Qt.Popup 窗口不会成为 activeWindow，需用 focus.window() 定位
+        focus_win = focus.window() if focus is not None else None
+        if focus_win is not None and focus_win is not self:
+            if isinstance(focus_win, QDialog):
+                focus_win.reject()
+                return
+            if int(focus_win.windowFlags()) & int(Qt.Popup):
+                focus_win.close()
+                return
+
+        # 再检查 activeWindow（兼容标准模态对话框）
+        active = QApplication.activeWindow()
+        if active is not None and active is not self and active is not focus_win:
+            if isinstance(active, QDialog):
+                active.reject()
+                return
+            self._send_key(active, Qt.Key_Escape)
+            return
+
+        # 3) 确认添加页面 → 取消返回
+        if (self.confirm_add_window is not None
+                and self.confirm_add_page_index is not None
+                and self.stacked.currentIndex() == self.confirm_add_page_index):
+            self._on_confirm_add_cancelled()
+            return
+
+        # 3b) 内嵌 SGDB 封面选择器 → 取消返回
+        if (self._sgdb_cover_widget is not None
+                and self._sgdb_cover_page_index is not None
+                and self.stacked.currentIndex() == self._sgdb_cover_page_index):
+            self._on_sgdb_cover_cancelled()
+            return
+
+        # 4) 焦点在页面内容中 → 返回侧栏
+        if focus is not None and not self.sidebar.isAncestorOf(focus):
+            self._focus_sidebar_current()
+            return
+
+        # 5) 已在最顶层（焦点在侧栏）→ 显示退出确认卡片
+        self.confirm_card(
+            'question', self.tr("退出"), self.tr("确定要退出吗？"),
+            default_yes=False,
+            on_result=lambda yes: yes and self.close()
+        )
+
+    # ---- 通用嵌入式确认卡片 ----
+
+    def confirm_card(self, card_type, title, message, yes_text=None, no_text=None,
+                     default_yes=False, on_result=None):
+        """
+        统一的嵌入式卡片弹层入口（供内部和各页面使用）。
+
+        card_type: 'question' / 'information' / 'warning' / 'critical'
+        返回：ConfirmCard 实例
+        """
+        card = ConfirmCard(
+            parent=self,
+            card_type=card_type,
+            title=title,
+            message=message,
+            yes_text=yes_text,
+            no_text=no_text,
+            default_yes=default_yes,
+        )
+        # 入栈：无论外部是否传入 on_result，先保证栈一致
+        self._modal_confirm_cards.append(card)
+
+        def _done(result):
+            # 出栈
+            try:
+                if card in self._modal_confirm_cards:
+                    self._modal_confirm_cards.remove(card)
+            except Exception:
+                pass
+            # 回调
+            if on_result is not None:
+                try:
+                    on_result(result)
+                except Exception:
+                    pass
+
+        card.on_finished(_done)
+        # 显示并居中（ResizeEvent 会在栈中有卡片时重排所有卡片居中）
+        card.show()
+        return card
+
+    def _center_all_confirm_cards(self):
+        """将栈中所有卡片均重新居中。"""
+        if not self._modal_confirm_cards:
+            return
+        for card in self._modal_confirm_cards:
+            try:
+                if hasattr(card, '_center'):
+                    card._center()
+                elif hasattr(card, 'parentWidget') and card.parentWidget() is not None:
+                    pw = card.parentWidget()
+                    x = (pw.width() - card.width()) // 2
+                    y = (pw.height() - card.height()) // 2
+                    card.move(x, y)
+            except Exception:
+                pass
+
+    # ---- 焦点辅助 ----
+
+    def _focus_sidebar_current(self):
+        """将焦点设为当前页面对应的侧栏按钮。"""
+        idx = self.stacked.currentIndex()
+        if (self.confirm_add_page_index is not None
+                and idx == self.confirm_add_page_index):
+            idx = 0
+        if (self._sgdb_cover_page_index is not None
+                and idx == self._sgdb_cover_page_index):
+            idx = self._sgdb_cover_prev_index if self._sgdb_cover_prev_index is not None else 0
+        btn = self.button_group.button(idx) if self.button_group else None
+        if btn is None:
+            btn = self.button_group.button(0) if self.button_group else None
+        if btn is not None:
+            btn.setFocus()
+
+    def _focus_first_in_page(self):
+        """将焦点设为当前页面的第一个可聚焦控件。"""
+        page = self.stacked.currentWidget()
+        if page is None:
+            return
+        first = self._find_first_focusable(page)
+        if first is not None:
+            first.setFocus()
+            self._ensure_visible(first)
+        else:
+            self._focus_sidebar_current()
+
+    def _find_first_focusable(self, container):
+        """在容器中查找第一个可聚焦控件（排除侧栏按钮、滚动区域及其 viewport、纯 QFrame 容器）。"""
+        # 优先查找可交互控件（按钮 / 复选框 / 组合框 / 输入框 / 列表 / 表格）
+        interactive_types = (QAbstractButton, QComboBox, QLineEdit, QListWidget, QTableWidget)
+        # 第一轮：找可交互控件
+        for w in container.findChildren(QWidget):
+            if w is container:
+                continue
+            if self.sidebar.isAncestorOf(w):
+                continue
+            if isinstance(w, QScrollArea) or self._is_scrollarea_viewport(w):
+                continue
+            if type(w) is QFrame:
+                continue
+            if w.isVisible() and w.isEnabled() and w.focusPolicy() != Qt.NoFocus:
+                if isinstance(w, interactive_types):
+                    return w
+        # 第二轮：任何可聚焦控件（兜底）
+        for w in container.findChildren(QWidget):
+            if w is container:
+                continue
+            if self.sidebar.isAncestorOf(w):
+                continue
+            if isinstance(w, QScrollArea) or self._is_scrollarea_viewport(w):
+                continue
+            if type(w) is QFrame:
+                continue
+            if w.isVisible() and w.isEnabled() and w.focusPolicy() != Qt.NoFocus:
+                return w
+        return None
+
+    def _send_key(self, target, key):
+        """向目标控件同步发送一个按键事件（按下并释放）。"""
+        try:
+            press = QKeyEvent(QEvent.KeyPress, key, Qt.NoModifier)
+            release = QKeyEvent(QEvent.KeyRelease, key, Qt.NoModifier)
+            QApplication.sendEvent(target, press)
+            QApplication.sendEvent(target, release)
+        except Exception:
+            pass
+
+    def closeEvent(self, event):
+        """窗口关闭时释放手柄资源。"""
+        if getattr(self, "_gamepad_timer", None) is not None:
+            try:
+                self._gamepad_timer.stop()
+            except Exception:
+                pass
+        gp = getattr(self, "gamepad", None)
+        if gp is not None:
+            try:
+                gp.cleanup()
+            except Exception:
+                pass
+        super().closeEvent(event)
+
+    def resizeEvent(self, event):
+        """窗口大小变化时保持确认卡片居中。"""
+        super().resizeEvent(event)
+        self._center_all_confirm_cards()
+
     def show_confirm_add_window(self, pending_entries, apps_json, apps_json_path, output_folder,
                                 pseudo_sorting_enabled=False, close_after_completion=True):
         """显示确认添加窗口"""
@@ -681,22 +1320,121 @@ class MainWindow(QMainWindow):
             # 处理完成后返回到上一个页面
             self.stacked.setCurrentIndex(0)
         except Exception as e:
-            from PyQt5.QtWidgets import QMessageBox
-            QMessageBox.critical(self, self.tr("错误"), self.tr("处理确认添加时出错: %1").replace('%1', str(e)))
+            self.confirm_card('critical', self.tr("错误"),
+                              self.tr("处理确认添加时出错: %1").replace('%1', str(e)))
     
     def _on_confirm_add_cancelled(self):
         """取消添加时的处理"""
         # 返回到上一个页面（如添加游戏页面）
         self.stacked.setCurrentIndex(0)
+
+    def show_sgdb_cover_picker(self, app_name, exe_path, on_result, on_cancel=None):
+        """在主窗口 stacked 中内嵌显示 SGDB 封面选择器。
+
+        Args:
+            app_name: 游戏名称
+            exe_path: 可执行文件路径
+            on_result: 回调 fn(result_bytes, used_icon, sgdb_name)
+            on_cancel: 可选回调 fn()
+        """
+        from sgdb_cover_window import SgdbCoverPickerDialog
+        import uuid as _uuid
+        from basic_def import TEMP_COVERS_DIR as _TEMP_DIR
+
+        # 清理上一次的封面选择器
+        self._close_sgdb_cover_picker()
+
+        os.makedirs(_TEMP_DIR, exist_ok=True)
+        newname = f"sgdb_{_uuid.uuid4().hex[:8]}.png"
+        output_path = os.path.join(_TEMP_DIR, newname)
+
+        dlg = SgdbCoverPickerDialog(
+            app_name=app_name,
+            output_path=output_path,
+            exe_path=exe_path,
+            parent=self,
+        )
+        # 内嵌模式：设为无边框 QWidget 风格
+        dlg.setWindowFlags(QtCore.Qt.Widget)
+
+        self._sgdb_cover_widget = dlg
+        self._sgdb_cover_newname = newname
+        self._sgdb_cover_callback = on_result
+        self._sgdb_cover_cancel_callback = on_cancel
+        self._sgdb_cover_prev_index = self.stacked.currentIndex()
+
+        dlg.cover_selected.connect(self._on_sgdb_cover_selected)
+        dlg.cover_cancelled.connect(self._on_sgdb_cover_cancelled)
+
+        self._sgdb_cover_page_index = self.stacked.addWidget(dlg)
+        self.stacked.setCurrentIndex(self._sgdb_cover_page_index)
+
+    def _on_sgdb_cover_selected(self, result_bytes, used_icon, sgdb_name):
+        """内嵌封面选择器：选择完成"""
+        cb = self._sgdb_cover_callback
+        newname = getattr(self, '_sgdb_cover_newname', None)
+        prev = self._sgdb_cover_prev_index
+        self._close_sgdb_cover_picker()
+        if prev is not None:
+            self.stacked.setCurrentIndex(prev)
+        if cb:
+            cb(result_bytes, used_icon, sgdb_name, newname)
+
+    def _on_sgdb_cover_cancelled(self):
+        """内嵌封面选择器：取消"""
+        cb = getattr(self, '_sgdb_cover_cancel_callback', None)
+        prev = self._sgdb_cover_prev_index
+        self._close_sgdb_cover_picker()
+        if prev is not None:
+            self.stacked.setCurrentIndex(prev)
+        if cb:
+            cb()
+
+    def _close_sgdb_cover_picker(self):
+        """移除并清理内嵌封面选择器"""
+        if self._sgdb_cover_widget is not None and self._sgdb_cover_page_index is not None:
+            w = self.stacked.widget(self._sgdb_cover_page_index)
+            if w is not None:
+                self.stacked.removeWidget(w)
+                w.deleteLater()
+        self._sgdb_cover_widget = None
+        self._sgdb_cover_page_index = None
+        self._sgdb_cover_prev_index = None
+        self._sgdb_cover_callback = None
+        self._sgdb_cover_cancel_callback = None
+        self._sgdb_cover_newname = None
     
     def apply_theme(self, theme):
         """应用主题"""
+        # 焦点高亮样式：仅在用户操作过手柄后才显示，避免启动时有突兀的高亮
+        focus_styles = ""
+        if getattr(self, '_gamepad_active', False):
+            focus_styles = (
+                " QPushButton:focus { background-color: #66ccff; color: #003344; border: 2px solid #ffffff; }"
+                " QPushButton:checked:focus { background-color: #66ccff; color: #003344; border: 2px solid #ffffff; }"
+                " QLineEdit:focus { border: 2px solid #66ccff; }"
+                " QComboBox:focus { border: 2px solid #66ccff; }"
+                " QTextEdit:focus { border: 2px solid #66ccff; }"
+                " QPlainTextEdit:focus { border: 2px solid #66ccff; }"
+                " QCheckBox:focus { border: 2px solid #66ccff; }"
+                " QListWidget::item:focus { background-color: #2E7D9B; color: #ffffff; }"
+            )
+            sidebar_focus = (
+                " QPushButton:focus { border: 2px solid #66ccff; }"
+                " QPushButton:checked:focus { background: #66ccff; color: #003344; border: 2px solid #ffffff; }"
+            )
+        else:
+            sidebar_focus = ""
+
         if theme == "深色":
             stylesheet = (
                 "QWidget { background-color: #2b2b2b; color: #ffffff; } "
-                "QPushButton { background-color: #404040; color: #ffffff; border: 1px solid #555555; padding: 5px; border-radius: 3px; } "
-                "QPushButton:hover { background-color: #505050; } "
-                "QPushButton:checked { background-color: #2E7D9B; font-weight: 600; } "
+                "QWidget:focus { outline: none; } "
+                "QPushButton { background-color: #2E7D9B; color: white; border: 2px solid transparent; padding: 2px 6px; border-radius: 5px; } "
+                "QPushButton:hover { background-color: #245A71; } "
+                "QPushButton:pressed { background-color: #1C4455; } "
+                "QPushButton:checked { background-color: #245A71; } "
+                "QPushButton:disabled { background-color: #888888; color: #cccccc; } "
                 "QLineEdit { background-color: #404040; color: #ffffff; border: 1px solid #555555; padding: 5px; } "
                 "QComboBox { background-color: #404040; color: #ffffff; border: 1px solid #555555; padding: 5px; } "
                 "QComboBox QAbstractItemView { background-color: #404040; color: #ffffff; selection-background-color: #2E7D9B; } "
@@ -711,6 +1449,7 @@ class MainWindow(QMainWindow):
                 "QCheckBox::indicator:checked { background: #2E7D9B; border: 1px solid #225962; } "
                 "QTableWidget { background-color: #404040; color: #ffffff; gridline-color: #555555; } "
                 "QTableWidget::item { background-color: #404040; color: #ffffff; } "
+                "QTableWidget::item:selected { background-color: #2E7D9B; color: #ffffff; } "
                 "QHeaderView::section { background-color: #505050; color: #ffffff; border: 1px solid #555555; padding: 4px; } "
                 "QListWidget { background-color: #404040; color: #ffffff; } "
                 "QListWidget::item { background-color: #404040; color: #ffffff; } "
@@ -721,20 +1460,23 @@ class MainWindow(QMainWindow):
                 "QScrollBar:horizontal { background: #2b2b2b; height: 12px; border-radius: 6px; } "
                 "QScrollBar::handle:horizontal { background: #505050; border-radius: 6px; min-width: 20px; } "
                 "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }"
+                + focus_styles
             )
             # 更新侧边栏样式
-            self.sidebar.setStyleSheet("QWidget { background-color: #333333; } QPushButton { border: none; background: #404040; color: #ffffff; } QPushButton:checked { background: #2E7D9B; font-weight: 600; }")
+            self.sidebar.setStyleSheet("QWidget { background-color: #333333; } QPushButton { border: none; background: #404040; color: #ffffff; } QPushButton:checked { background: #2E7D9B; font-weight: 600; }" + sidebar_focus)
         elif theme == "经典":
             # 暂时默认为浅色
-            stylesheet = ""
-            self.sidebar.setStyleSheet("")
+            stylesheet = ("QWidget:focus { outline: none; }" + focus_styles)
+            self.sidebar.setStyleSheet("" + sidebar_focus)
         else:  # 浅色
             stylesheet = (
+                "QWidget:focus { outline: none; } "
                 "QCheckBox::indicator { width:44px; height:24px; border-radius:12px; } "
                 "QCheckBox::indicator:unchecked { background: #e6e6e6; border: 1px solid #d0d0d0; } "
                 "QCheckBox::indicator:checked { background: #2E7D9B; border: 1px solid #225962; }"
+                + focus_styles
             )
-            self.sidebar.setStyleSheet("QWidget { background-color: #f0f0f0; } QPushButton { border: none; background: #f5f5f5; } QPushButton:checked { background: #e8e8e8; font-weight: 600; }")
+            self.sidebar.setStyleSheet("QWidget { background-color: #f0f0f0; } QPushButton { border: none; background: #f5f5f5; } QPushButton:checked { background: #e8e8e8; font-weight: 600; }" + sidebar_focus)
         
         app = QApplication.instance()
         if app:
@@ -765,20 +1507,22 @@ class MainWindow(QMainWindow):
         self._apply_language(lang_code)
         # 需要重建界面以刷新所有 tr() 字符串
         # 最简单的方式是重启应用
-        from PyQt5.QtWidgets import QMessageBox
-        reply = QMessageBox.question(
-            self,
-            self.tr("重启应用"),
-            self.tr("语言已更改，需要重启应用才能生效。是否立即重启？"),
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes
-        )
-        if reply == QMessageBox.Yes:
+        def _restart_if_yes(yes):
+            if not yes:
+                return
             app = QApplication.instance()
             app.quit()
             # 重新启动
             python = sys.executable
             os.execl(python, python, *sys.argv)
+
+        self.confirm_card(
+            'question',
+            self.tr("重启应用"),
+            self.tr("语言已更改，需要重启应用才能生效。是否立即重启？"),
+            default_yes=True,
+            on_result=_restart_if_yes,
+        )
 
 
 if __name__ == "__main__":

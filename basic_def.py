@@ -1,13 +1,13 @@
-import os, sys, time, glob, json, re, shutil, threading, configparser, subprocess, urllib3, tempfile, ctypes, copy
+import os, sys, time, glob, json, re, shutil, threading, configparser, tempfile, ctypes, copy
 from ctypes import wintypes
 import tkinter as tk
-import winreg, win32com.client, pythoncom, win32api, win32con, win32security, win32process, win32gui, psutil, vdf
-from PIL import Image, ImageDraw, ImageFont, ImageTk
+import winreg, win32com.client, pythoncom
+from PIL import Image, ImageDraw
 from colorthief import ColorThief
 from io import BytesIO
-import requests, webbrowser
+import requests
 from icoextract import IconExtractor, IconExtractorError
-from PyQt5 import QtWidgets, QtCore, QtGui
+from PyQt5 import QtCore, QtWidgets
 
 config = configparser.ConfigParser()
 # 始终使用与代码文件同级的绝对路径，避免相对工作目录导致的读写不一致
@@ -31,6 +31,8 @@ restart_sunshine_after_add = False  # 添加后重启sunshine，默认关闭
 theme = "深色"  # 主题设置，默认为深色
 image_path_use_relative = False  # apps.json 中 image-path 使用相对路径（基地版兼容），默认关闭即写绝对路径
 language = "zh_CN"  # 语言设置，默认为简体中文
+autorun_scanner = False  # 进入添加游戏页时自动运行已启用的扫描器，默认关闭
+apply_sgdb_name = True  # run 后扫描器处理封面时，SGDB 命中后自动应用 SGDB 游戏名称，默认开启
 
 def get_app_install_path():
     app_name = "sunshine"
@@ -212,7 +214,7 @@ def save_apps_json(apps_json, file_path, extra_covers=None):
             print(f"清空 temp 目录失败: {e}")
 def load_config():
     """加载配置文件并同步 `folder_selected` 变量"""
-    global close_after_completion, pseudo_sorting_enabled, hidden_files, folder, folder_selected, steam_excluded_games, auto_delete_orphaned_entries, restart_sunshine_after_add, theme, image_path_use_relative, language
+    global close_after_completion, pseudo_sorting_enabled, hidden_files, folder, folder_selected, steam_excluded_games, auto_delete_orphaned_entries, restart_sunshine_after_add, theme, image_path_use_relative, language, autorun_scanner, apply_sgdb_name
     # 优先使用 UTF-8 打开配置文件以避免系统默认编码（如 GBK）导致的 UnicodeDecodeError。
     # 如果文件不存在则跳过，后续会调用 save_config() 创建默认文件。
     if os.path.exists(config_file_path):
@@ -250,6 +252,10 @@ def load_config():
     image_path_use_relative = config.getboolean('Settings', 'image_path_use_relative', fallback=False)
     # 新增 language
     language = config.get('Settings', 'language', fallback='zh_CN')
+    # 新增 autorun_scanner
+    autorun_scanner = config.getboolean('Settings', 'autorun_scanner', fallback=False)
+    # 新增 apply_sgdb_name
+    apply_sgdb_name = config.getboolean('Settings', 'apply_sgdb_name', fallback=True)
     if os.path.exists(config_file_path)==False:
         save_config()  #没有配置文件保存下
     # 检查 folder 是否有效
@@ -268,7 +274,7 @@ def load_config():
 def save_config():
     """保存选择的目录到配置文件"""
     try:
-        global hidden_files, folder, folder_selected, close_after_completion, pseudo_sorting_enabled, steam_excluded_games, auto_delete_orphaned_entries, restart_sunshine_after_add, theme, image_path_use_relative, language  # 添加全局变量声明
+        global hidden_files, folder, folder_selected, close_after_completion, pseudo_sorting_enabled, steam_excluded_games, auto_delete_orphaned_entries, restart_sunshine_after_add, theme, image_path_use_relative, language, autorun_scanner, apply_sgdb_name  # 添加全局变量声明
         # 优先使用运行时的 `folder_selected`，保持一致性
         if folder_selected:
             folder = folder_selected
@@ -295,6 +301,10 @@ def save_config():
             'image_path_use_relative': str(image_path_use_relative),
             # 新增 language
             'language': language,
+            # 新增 autorun_scanner
+            'autorun_scanner': str(autorun_scanner),
+            # 新增 apply_sgdb_name
+            'apply_sgdb_name': str(apply_sgdb_name),
         }
         
         # 保留 ignored_apps 如果存在
@@ -888,7 +898,16 @@ def notify_run_error(message):
     try:
         app = QtWidgets.QApplication.instance()
         if app:
-            QtWidgets.QMessageBox.critical(None, "错误", message)
+            # 优先嵌入主窗口（若存在）
+            mw = None
+            for w in app.topLevelWidgets():
+                if hasattr(w, 'confirm_card') and callable(getattr(w, 'confirm_card', None)):
+                    mw = w
+                    break
+            if mw is not None:
+                mw.confirm_card('critical', QtCore.QCoreApplication.translate('basic_def', '错误'), message)
+            else:
+                QtWidgets.QMessageBox.critical(None, QtCore.QCoreApplication.translate('basic_def', '错误'), message)
     except Exception:
         pass
 
@@ -970,6 +989,225 @@ def _collect_cover_search_terms(app_name, target_path, shortcut_file):
 
     # 限制搜索关键词数量，减少请求次数并提升整体速度
     return terms[:3]
+
+
+class ConfirmCard(QtWidgets.QFrame):
+    """
+    通用嵌入式确认/提示卡片：类似 QMessageBox.question/critical/information/warning，
+    但以覆盖在父窗口中心的小卡片形式呈现，用于嵌入主窗口内。
+
+    使用方式：
+        card = ConfirmCard(parent_widget, 'question', '标题', '内容提示',
+                           yes_text='是', no_text='否', default_yes=False)
+        card.on_finished(lambda result: ...)  # result: True 点击了是，False 点击了否/B关闭
+        card.show()
+    或快捷函数：
+        ConfirmCard.question(parent, '标题', '提示', on_result=fn)
+        ConfirmCard.information(parent, '标题', '提示', on_closed=fn)
+    """
+
+    ICON_STYLES = {
+        'question':    {'color': '#66ccff', 'label': '?'},
+        'information': {'color': '#2E7D9B', 'label': 'i'},
+        'warning':     {'color': '#e6a23c', 'label': '!'},
+        'critical':    {'color': '#ff4d4f', 'label': '×'},
+    }
+
+    def __init__(self, parent, card_type='question', title='', message='',
+                 yes_text=None, no_text=None, default_yes=False, on_finished=None):
+        super().__init__(parent)
+        self._card_type = card_type
+        self._finished = False
+        self._result = False
+        self._callbacks = []
+        if on_finished is not None:
+            self._callbacks.append(on_finished)
+
+        # 样式
+        self.setObjectName('ConfirmCard')
+        self.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        self.setStyleSheet(
+            "QFrame#ConfirmCard {"
+            "  background-color: #2b2b2b;"
+            "  border: 2px solid %s;" % self.ICON_STYLES.get(card_type, {}).get('color', '#2E7D9B')
+            + "  border-radius: 10px;"
+            "}"
+            "QLabel { color: #ffffff; background: transparent; }"
+            "QLabel#ccTitle { font-weight: bold; font-size: 16px; }"
+            "QLabel#ccIcon {"
+            "  background: %s;" % self.ICON_STYLES.get(card_type, {}).get('color', '#2E7D9B')
+            + "  color: white; border-radius: 20px; font-weight: bold; font-size: 22px;"
+            "}"
+            "QPushButton {"
+            "  background-color: #2E7D9B;"
+            "  color: white;"
+            "  border: 2px solid transparent;"
+            "  border-radius: 5px;"
+            "  padding: 2px 6px;"
+            "}"
+            "QPushButton:hover { background-color: #245A71; }"
+            "QPushButton:pressed { background-color: #1C4455; }"
+            "QPushButton:focus {"
+            "  background-color: #66ccff; color: #003344; border: 2px solid #ffffff;"
+            "}"
+            "QPushButton#ccCancel { background-color: #555555; }"
+            "QPushButton#ccCancel:hover { background-color: #444444; }"
+            "QPushButton#ccCancel:focus {"
+            "  background-color: #66ccff; color: #003344; border: 2px solid #ffffff;"
+            "}"
+        )
+
+        # 尺寸自适应：question 有双按钮略宽，information/单按钮略窄
+        is_question = (card_type == 'question')
+        self.setMinimumWidth(340 if is_question else 320)
+        self.setMaximumWidth(520)
+
+        # 外层布局
+        outer = QtWidgets.QHBoxLayout(self)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(14)
+
+        # 左侧图标
+        icon_label = QtWidgets.QLabel()
+        icon_label.setObjectName('ccIcon')
+        icon_label.setAlignment(QtCore.Qt.AlignCenter)
+        icon_label.setFixedSize(40, 40)
+        icon_label.setText(self.ICON_STYLES.get(card_type, {}).get('label', 'i'))
+        outer.addWidget(icon_label, 0, QtCore.Qt.AlignTop)
+
+        # 右侧内容
+        right = QtWidgets.QVBoxLayout()
+        right.setSpacing(10)
+
+        if title:
+            t = QtWidgets.QLabel(title)
+            t.setObjectName('ccTitle')
+            t.setWordWrap(True)
+            right.addWidget(t)
+
+        if message:
+            m = QtWidgets.QLabel(message)
+            m.setWordWrap(True)
+            m.setStyleSheet('color: #dddddd;')
+            right.addWidget(m)
+
+        right.addStretch()
+
+        # 按钮行
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.setSpacing(10)
+
+        if is_question:
+            no_t = no_text if no_text is not None else QtCore.QCoreApplication.translate('ConfirmCard', '否')
+            yes_t = yes_text if yes_text is not None else QtCore.QCoreApplication.translate('ConfirmCard', '是')
+            self._no_btn = QtWidgets.QPushButton(no_t)
+            self._no_btn.setObjectName('ccCancel')
+            self._no_btn.setFixedSize(80, 34)
+            self._no_btn.setFocusPolicy(QtCore.Qt.StrongFocus)
+            self._no_btn.clicked.connect(lambda: self._finish(False))
+
+            self._yes_btn = QtWidgets.QPushButton(yes_t)
+            self._yes_btn.setFixedSize(80, 34)
+            self._yes_btn.setFocusPolicy(QtCore.Qt.StrongFocus)
+            self._yes_btn.clicked.connect(lambda: self._finish(True))
+            btn_row.addWidget(self._no_btn)
+            btn_row.addWidget(self._yes_btn)
+            self._default_btn = self._yes_btn if default_yes else self._no_btn
+        else:
+            ok_t = yes_text if yes_text is not None else QtCore.QCoreApplication.translate('ConfirmCard', '确定')
+            self._yes_btn = QtWidgets.QPushButton(ok_t)
+            self._yes_btn.setFixedSize(100, 34)
+            self._yes_btn.setFocusPolicy(QtCore.Qt.StrongFocus)
+            self._yes_btn.clicked.connect(lambda: self._finish(True))
+            self._no_btn = None
+            btn_row.addWidget(self._yes_btn)
+            self._default_btn = self._yes_btn
+
+        right.addLayout(btn_row)
+        outer.addLayout(right, 1)
+
+        # 根据内容自适应高度
+        self.adjustSize()
+        # 固定尺寸避免抖动
+        w = max(self.width(), self.minimumWidth())
+        h = max(self.height(), 130 if is_question else 110)
+        self.setFixedSize(w, h)
+
+    # ---- 外部 API ----
+
+    def on_finished(self, callback):
+        if self._finished:
+            callback(self._result)
+            return
+        self._callbacks.append(callback)
+
+    def show(self):
+        self._center()
+        self.raise_()
+        super().show()
+        # 聚焦默认按钮
+        if self._default_btn is not None:
+            self._default_btn.setFocus()
+
+    def close_card(self):
+        """外部（手柄 B 键等）关闭卡片，视为取消。"""
+        self._finish(False)
+
+    # ---- 静态便捷方法 ----
+
+    @staticmethod
+    def question(parent, title, message, yes_text=None, no_text=None, default_yes=False, on_result=None):
+        card = ConfirmCard(parent, 'question', title, message,
+                           yes_text=yes_text, no_text=no_text, default_yes=default_yes,
+                           on_finished=on_result)
+        card.show()
+        return card
+
+    @staticmethod
+    def information(parent, title, message, on_closed=None):
+        card = ConfirmCard(parent, 'information', title, message, on_finished=lambda _r: on_closed() if on_closed else None)
+        card.show()
+        return card
+
+    @staticmethod
+    def warning(parent, title, message, on_closed=None):
+        card = ConfirmCard(parent, 'warning', title, message, on_finished=lambda _r: on_closed() if on_closed else None)
+        card.show()
+        return card
+
+    @staticmethod
+    def critical(parent, title, message, on_closed=None):
+        card = ConfirmCard(parent, 'critical', title, message, on_finished=lambda _r: on_closed() if on_closed else None)
+        card.show()
+        return card
+
+    # ---- 内部 ----
+
+    def _center(self):
+        pw = self.parentWidget()
+        if pw is None:
+            return
+        pw_rect = pw.rect() if hasattr(pw, 'rect') else QtCore.QRect(0, 0, pw.width(), pw.height())
+        x = pw_rect.x() + (pw_rect.width() - self.width()) // 2
+        y = pw_rect.y() + (pw_rect.height() - self.height()) // 2
+        self.move(x, y)
+
+    def _finish(self, result):
+        if self._finished:
+            return
+        self._finished = True
+        self._result = result
+        callbacks, self._callbacks = list(self._callbacks), []
+        try:
+            for cb in callbacks:
+                try:
+                    cb(result)
+                except Exception:
+                    pass
+        finally:
+            self.hide()
+            self.deleteLater()
 
 
 class SteamGridDBApiClient:
@@ -1254,11 +1492,12 @@ def _download_sgdb_cover_bytes(url, sgdb_client):
 
 
 def try_get_sgdb_cover_bytes_for_entry(app_name, target_path, shortcut_file, sgdb_client=None):
+    """返回 (cover_bytes, sgdb_game_name)。未命中时 cover_bytes 为 None。"""
     api = sgdb_client
     if api is None:
         api_key = _get_sgdb_api_key()
         if not api_key:
-            return None
+            return None, None
         net_options = _get_sgdb_network_options()
         api = SteamGridDBApiClient(
             api_key,
@@ -1268,14 +1507,15 @@ def try_get_sgdb_cover_bytes_for_entry(app_name, target_path, shortcut_file, sgd
 
     best_game = _pick_best_sgdb_game(api, app_name, target_path, shortcut_file)
     if not best_game:
-        return None
+        return None, None
 
     game_id = best_game.get("id")
     grids = api.get_grids(game_id)
     best_grid = _pick_best_sgdb_grid(grids)
     if not best_grid:
-        return None
+        return None, None
 
+    sgdb_game_name = best_game.get("name")
     candidate_urls = [best_grid.get("url"), best_grid.get("thumb")]
     tried = set()
     for cover_url in candidate_urls:
@@ -1285,7 +1525,7 @@ def try_get_sgdb_cover_bytes_for_entry(app_name, target_path, shortcut_file, sgd
         try:
             cover_bytes = _download_sgdb_cover_bytes(cover_url, api)
             if cover_bytes:
-                return cover_bytes
+                return cover_bytes, sgdb_game_name
         except requests.HTTPError as e:
             status = e.response.status_code if getattr(e, "response", None) is not None else None
             print(f"SGDB 资源下载失败 ({status}) {app_name}: {e}")
@@ -1294,7 +1534,7 @@ def try_get_sgdb_cover_bytes_for_entry(app_name, target_path, shortcut_file, sgd
             print(f"SGDB 资源下载异常 {app_name}: {e}")
             continue
 
-    return None
+    return None, None
 
 
 def generate_covers_for_entries(pending_entries, output_folder, progress_callback=None, cover_ready_callback=None, cancel_event=None):
@@ -1441,15 +1681,15 @@ def generate_covers_for_entries(pending_entries, output_folder, progress_callbac
         def _fetch_sgdb_cover(entry):
             # allow individual tasks to abort early
             if cancel_event and cancel_event.is_set():
-                return entry, None
+                return entry, None, None
             client = _get_thread_client()
-            cover_bytes = try_get_sgdb_cover_bytes_for_entry(
+            cover_bytes, sgdb_game_name = try_get_sgdb_cover_bytes_for_entry(
                 app_name=entry["app_name"],
                 target_path=entry["target_path"],
                 shortcut_file=entry["shortcut_file"],
                 sgdb_client=client
             )
-            return entry, cover_bytes
+            return entry, cover_bytes, sgdb_game_name
 
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="sgdb") as executor:
             future_map = {executor.submit(_fetch_sgdb_cover, entry): entry for entry in sgdb_candidates}
@@ -1459,9 +1699,12 @@ def generate_covers_for_entries(pending_entries, output_folder, progress_callbac
                 entry = future_map[future]
                 app_name = entry["app_name"]
                 try:
-                    _, sgdb_cover_bytes = future.result()
+                    _, sgdb_cover_bytes, sgdb_game_name = future.result()
                     if sgdb_cover_bytes:
                         entry["cover_bytes"] = sgdb_cover_bytes
+                        # 根据 apply_sgdb_name 配置决定是否用 SGDB 游戏名称覆盖本地名称
+                        if apply_sgdb_name and sgdb_game_name:
+                            entry["app_name"] = sgdb_game_name
                         _mark_done(entry, "sgdb", True)
                         print(f"已从 SGDB 自动匹配封面: {app_name}")
                         _emit("item_done", app_name=app_name, message="SGDB cover downloaded")

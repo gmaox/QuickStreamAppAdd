@@ -193,6 +193,9 @@ class SgdbCoverPickerDialog(QtWidgets.QDialog):
     thumb_error = QtCore.pyqtSignal(int, int, str)
     cover_saved = QtCore.pyqtSignal(object, object)
     cover_error = QtCore.pyqtSignal(str)
+    # 内嵌模式信号：封面选择完成 / 取消
+    cover_selected = QtCore.pyqtSignal(object, object, object)  # (result_bytes, used_icon, sgdb_name)
+    cover_cancelled = QtCore.pyqtSignal()
 
     def __init__(self, app_name, output_path, exe_path=None, remaining_games=None, parent=None):
         super().__init__(parent)
@@ -260,6 +263,7 @@ class SgdbCoverPickerDialog(QtWidgets.QDialog):
         self.game_list = QtWidgets.QListWidget()
         self.game_list.itemDoubleClicked.connect(lambda _: self._load_selected_game_grids())
         self.game_list.itemClicked.connect(lambda _: self._load_selected_game_grids())
+        self.game_list.itemActivated.connect(lambda _: self._load_selected_game_grids())
         left_l.addWidget(self.game_list, 1)
 
         self.apply_name_chk = QtWidgets.QCheckBox(self.tr("将SGDB游戏名称应用至本地"))
@@ -318,6 +322,16 @@ class SgdbCoverPickerDialog(QtWidgets.QDialog):
         self.thumb_error.connect(self._on_thumb_error)
         self.cover_saved.connect(self._on_cover_saved)
         self.cover_error.connect(self._on_cover_error)
+
+    def accept(self):
+        """重写 accept：先发出 cover_selected 信号供内嵌模式使用，再调用父类 accept。"""
+        self.cover_selected.emit(self.result_bytes, self.used_icon, self.result_sgdb_name)
+        super().accept()
+
+    def reject(self):
+        """重写 reject：先发出 cover_cancelled 信号供内嵌模式使用，再调用父类 reject。"""
+        self.cover_cancelled.emit()
+        super().reject()
 
     def _run_thread(self, fn):
         t = threading.Thread(target=fn, daemon=True)

@@ -14,6 +14,28 @@ from basic_def import (
     resolve_cover_file_path,
 )
 from sgdb_cover_window import choose_cover_with_sgdb_qt
+from main import find_main_window
+
+
+def _cc(widget, card_type, title, message, on_result=None, yes_text=None, no_text=None, default_yes=False):
+    """通过父级 MainWindow 的 confirm_card 统一显示卡片；找不到主窗口则回退 QMessageBox。"""
+    mw = find_main_window(widget)
+    if mw is not None:
+        return mw.confirm_card(card_type, title, message, yes_text=yes_text, no_text=no_text,
+                              default_yes=default_yes, on_result=on_result)
+    from PyQt5.QtWidgets import QMessageBox
+    if card_type == 'question':
+        reply = QMessageBox.question(widget, title, message, QMessageBox.Yes | QMessageBox.No,
+                                     QMessageBox.Yes if default_yes else QMessageBox.No)
+        if on_result:
+            on_result(reply == QMessageBox.Yes)
+    else:
+        fn = {'information': QMessageBox.information, 'warning': QMessageBox.warning,
+              'critical': QMessageBox.critical}.get(card_type, QMessageBox.information)
+        fn(widget, title, message)
+        if on_result:
+            on_result(True)
+    return None
 
 THUMB_SIZE = (80, 120)
 IMAGE_CACHE = {}
@@ -58,14 +80,29 @@ class EditGameCard(QtWidgets.QFrame):
     def init_ui(self):
         h = QtWidgets.QHBoxLayout(self)
         h.setContentsMargins(8, 8, 8, 8)
-        # cover
-        self.cover_lbl = QtWidgets.QLabel(self.tr("无封面"))
+        # cover：使用 QPushButton 代替 QLabel，以便手柄可聚焦点击
+        self.cover_lbl = QtWidgets.QPushButton(self.tr("无封面"))
         self.cover_lbl.setFixedSize(80, 120)
-        # 封面占位背景与文字由全局主题控制（深色 #333 与 white 由主题统一）
-        self.cover_lbl.setStyleSheet('')
-        self.cover_lbl.setAlignment(QtCore.Qt.AlignCenter)
-        self.cover_lbl.setCursor(QtCore.Qt.PointingHandCursor)  # 设置鼠标指针为手型
-        self.cover_lbl.mousePressEvent = self.on_cover_click  # 连接点击事件
+        # 继承全局主题背景（深色 #333 / white 文字由主题统一），并补充 focus 样式以呼应其它按钮
+        self.cover_lbl.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #333;"
+            "  color: white;"
+            "  border: 2px solid transparent;"
+            "  border-radius: 4px;"
+            "  text-align: center;"
+            "}"
+            "QPushButton:focus {"
+            "  background-color: #66ccff;"
+            "  color: #003344;"
+            "  border: 4px solid #66ccff;"
+            "  outline: 2px solid #ffffff;"
+            "  outline-offset: 2px;"
+            "}"
+        )
+        self.cover_lbl.setFocusPolicy(QtCore.Qt.StrongFocus)
+        self.cover_lbl.setCursor(QtCore.Qt.PointingHandCursor)
+        self.cover_lbl.clicked.connect(self.on_cover_click)
         h.addWidget(self.cover_lbl)
 
         # info
@@ -92,7 +129,7 @@ class EditGameCard(QtWidgets.QFrame):
         self.del_btn = QtWidgets.QPushButton(self.tr("删除"))
         self.cover_btn = QtWidgets.QPushButton(self.tr("更换封面"))
         for btn in (self.del_btn, self.edit_btn, self.cover_btn):
-            btn.setFixedHeight(26)
+            btn.setFixedHeight(34)
             btns.addWidget(btn)
 
         v.addLayout(btns)
@@ -104,27 +141,36 @@ class EditGameCard(QtWidgets.QFrame):
             cover_full = resolve_cover_file_path(cover_filename)
             pix = get_thumb(cover_full)
             if pix:
-                self.cover_lbl.setPixmap(pix.scaled(80, 120, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+                self.cover_lbl.setText('')
+                scaled = pix.scaled(80, 120, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+                self.cover_lbl.setIcon(QtGui.QIcon(scaled))
+                self.cover_lbl.setIconSize(QtCore.QSize(80, 120))
 
         # signals
         self.del_btn.clicked.connect(self.on_delete)
         self.edit_btn.clicked.connect(self.on_edit)
         self.cover_btn.clicked.connect(self.on_change_cover)
 
-    def on_cover_click(self, event):
+    def on_cover_click(self):
         """点击封面时使用 SGDB 选择封面"""
         self._change_cover_with_sgdb()
 
     def on_delete(self):
         name = self.entry.get('name', self.tr("未知游戏"))
-        if QtWidgets.QMessageBox.question(self, self.tr("确认删除"), self.tr("确定要删除游戏 '%1' 吗？").replace('%1', name)) != QtWidgets.QMessageBox.Yes:
-            return
-        for i, e in enumerate(self.apps_json.get('apps', [])):
-            if e is self.entry or e == self.entry:
-                self.apps_json['apps'].pop(i)
-                save_apps_json(self.apps_json, self.apps_json_path)
-                self.refresh_cb()
+
+        def _do_delete(yes):
+            if not yes:
                 return
+            for i, e in enumerate(self.apps_json.get('apps', [])):
+                if e is self.entry or e == self.entry:
+                    self.apps_json['apps'].pop(i)
+                    save_apps_json(self.apps_json, self.apps_json_path)
+                    self.refresh_cb()
+                    return
+
+        _cc(self, 'question', self.tr("确认删除"),
+            self.tr("确定要删除游戏 '%1' 吗？").replace('%1', name),
+            on_result=_do_delete)
 
     def on_edit(self):
         """点击编辑按钮时，在右侧面板显示编辑界面而不是弹出对话框"""
@@ -195,29 +241,61 @@ class EditGameCard(QtWidgets.QFrame):
             IMAGE_CACHE.clear()  # clear cache so new thumb used
             self.refresh_cb()
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, self.tr("错误"), self.tr("更换封面失败: %1").replace('%1', str(e)))
+            _cc(self, 'critical', self.tr("错误"),
+                self.tr("更换封面失败: %1").replace('%1', str(e)))
 
     def _change_cover_with_sgdb(self):
-        """使用 SGDB 选择封面"""
+        """使用 SGDB 选择封面（内嵌在主窗口中）"""
         app_name = self.entry.get('name', self.tr("未知游戏"))
         exe_path = self.entry.get('cmd', '')
-        
-        # 确定输出路径
+
+        # 查找 MainWindow 以使用内嵌封面选择器
+        main_window = self._find_main_window()
+        if main_window is not None and hasattr(main_window, 'show_sgdb_cover_picker'):
+            main_window.show_sgdb_cover_picker(
+                app_name=app_name,
+                exe_path=exe_path,
+                on_result=self._on_sgdb_cover_result,
+            )
+        else:
+            # 降级：使用模态对话框
+            self._change_cover_with_sgdb_legacy(app_name, exe_path)
+
+    def _find_main_window(self):
+        """向上查找包含 show_sgdb_cover_picker 的主窗口"""
+        w = self.manage_window or self.parent()
+        while w is not None:
+            if hasattr(w, 'show_sgdb_cover_picker'):
+                return w
+            w = w.parent()
+        return None
+
+    def _on_sgdb_cover_result(self, result_bytes, used_icon, sgdb_name, newname):
+        """内嵌封面选择器回调"""
+        if result_bytes:
+            self.entry['image-path'] = format_image_path_for_apps_json(newname)
+            if sgdb_name:
+                self.entry['name'] = sgdb_name
+            save_apps_json(self.apps_json, self.apps_json_path, extra_covers=[(newname, result_bytes)])
+            IMAGE_CACHE.clear()
+            self.refresh_cb()
+
+    def _change_cover_with_sgdb_legacy(self, app_name, exe_path):
+        """降级：使用模态对话框选择封面"""
         os.makedirs(TEMP_COVERS_DIR, exist_ok=True)
         newname = f"sgdb_{uuid.uuid4().hex[:8]}.png"
         output_path = os.path.join(TEMP_COVERS_DIR, newname)
-        
+
         result_bytes, used_icon, sgdb_name = choose_cover_with_sgdb_qt(
             app_name=app_name,
             output_path=output_path,
             exe_path=exe_path
         )
-        
+
         if result_bytes:
             self.entry['image-path'] = format_image_path_for_apps_json(newname)
             if sgdb_name:
-                self.entry['name'] = sgdb_name  # 更新名称如果选择了应用 SGDB 名称
-            # 通过管理员进程保存封面与 apps.json
+                self.entry['name'] = sgdb_name
             save_apps_json(self.apps_json, self.apps_json_path, extra_covers=[(newname, result_bytes)])
             IMAGE_CACHE.clear()
             self.refresh_cb()
@@ -285,8 +363,8 @@ class ManageWindow(QtWidgets.QWidget):
         refresh_btn = QtWidgets.QPushButton(self.tr("刷新游戏列表"))
         refresh_btn.clicked.connect(self.reload_apps)
         # 按钮尺寸调整：固定高度，宽度合理
-        refresh_btn.setFixedHeight(40)
-        refresh_btn.setFixedWidth(120)
+        refresh_btn.setFixedHeight(48)
+        refresh_btn.setFixedWidth(140)
         bottom.addWidget(refresh_btn)
         bottom.addStretch()
         left_layout.addLayout(bottom)
@@ -334,11 +412,11 @@ class ManageWindow(QtWidgets.QWidget):
         
         btns = QtWidgets.QHBoxLayout()
         save_btn = QtWidgets.QPushButton(self.tr("保存"))
-        save_btn.setFixedHeight(26)
-        save_btn.setFixedWidth(80)
+        save_btn.setFixedHeight(34)
+        save_btn.setFixedWidth(90)
         cancel_btn = QtWidgets.QPushButton(self.tr("取消"))
-        cancel_btn.setFixedHeight(26)
-        cancel_btn.setFixedWidth(80)
+        cancel_btn.setFixedHeight(34)
+        cancel_btn.setFixedWidth(90)
         save_btn.clicked.connect(self._save_edit)
         cancel_btn.clicked.connect(self._close_edit_panel)
         btns.addStretch()

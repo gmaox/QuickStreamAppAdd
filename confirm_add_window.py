@@ -7,6 +7,28 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 from basic_def import generate_covers_for_entries, config, save_config, restart_sunshine_after_add, load_config
 from sgdb_cover_window import choose_cover_with_sgdb_qt
+from main import find_main_window
+
+
+def _cc(widget, card_type, title, message, on_result=None, yes_text=None, no_text=None, default_yes=False):
+    """通过父级 MainWindow 的 confirm_card 统一显示卡片；找不到主窗口则回退 QMessageBox。"""
+    mw = find_main_window(widget)
+    if mw is not None:
+        return mw.confirm_card(card_type, title, message, yes_text=yes_text, no_text=no_text,
+                              default_yes=default_yes, on_result=on_result)
+    from PyQt5.QtWidgets import QMessageBox
+    if card_type == 'question':
+        reply = QMessageBox.question(widget, title, message, QMessageBox.Yes | QMessageBox.No,
+                                     QMessageBox.Yes if default_yes else QMessageBox.No)
+        if on_result:
+            on_result(reply == QMessageBox.Yes)
+    else:
+        fn = {'information': QMessageBox.information, 'warning': QMessageBox.warning,
+              'critical': QMessageBox.critical}.get(card_type, QMessageBox.information)
+        fn(widget, title, message)
+        if on_result:
+            on_result(True)
+    return None
 
 THUMB_SIZE = (80, 120)
 
@@ -25,13 +47,28 @@ class ConfirmGameCard(QtWidgets.QFrame):
         h = QtWidgets.QHBoxLayout(self)
         h.setContentsMargins(8, 8, 8, 8)
 
-        self.cover_lbl = QtWidgets.QLabel(self.tr("没有封面"))
+        self.cover_lbl = QtWidgets.QPushButton(self.tr("没有封面"))
         self.cover_lbl.setFixedSize(80, 120)
-        self.cover_lbl.setAlignment(QtCore.Qt.AlignCenter)
-        # 封面占位样式由全局主题控制
-        self.cover_lbl.setStyleSheet('')
-        self.cover_lbl.setCursor(QtCore.Qt.PointingHandCursor)  # 设置鼠标指针为手型
-        self.cover_lbl.mousePressEvent = self.on_cover_click  # 连接点击事件
+        # 继承全局主题背景，并补充 focus 样式以呼应其它按钮
+        self.cover_lbl.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #333;"
+            "  color: white;"
+            "  border: 2px solid transparent;"
+            "  border-radius: 4px;"
+            "  text-align: center;"
+            "}"
+            "QPushButton:focus {"
+            "  background-color: #66ccff;"
+            "  color: #003344;"
+            "  border: 4px solid #66ccff;"
+            "  outline: 2px solid #ffffff;"
+            "  outline-offset: 2px;"
+            "}"
+        )
+        self.cover_lbl.setFocusPolicy(QtCore.Qt.StrongFocus)
+        self.cover_lbl.setCursor(QtCore.Qt.PointingHandCursor)
+        self.cover_lbl.clicked.connect(self.on_cover_click)
         h.addWidget(self.cover_lbl)
 
         v = QtWidgets.QVBoxLayout()
@@ -53,45 +90,35 @@ class ConfirmGameCard(QtWidgets.QFrame):
         self.btn_container = QtWidgets.QWidget()
         btns = QtWidgets.QHBoxLayout(self.btn_container)
         btns.setContentsMargins(0, 0, 0, 0)
-        btns.setSpacing(2)
-
-        self.left_btn = QtWidgets.QPushButton('←')
-        self.left_btn.setFixedSize(28, 22)
-        self.left_btn.clicked.connect(lambda: self.parent_window.move_entry(self.entry, -1))
-        btns.addWidget(self.left_btn)
-
-        self.right_btn = QtWidgets.QPushButton('→')
-        self.right_btn.setFixedSize(28, 22)
-        self.right_btn.clicked.connect(lambda: self.parent_window.move_entry(self.entry, 1))
-        btns.addWidget(self.right_btn)
+        btns.setSpacing(4)
 
         self.import_btn = QtWidgets.QPushButton(self.tr("导入封面"))
-        self.import_btn.setFixedHeight(22)
+        self.import_btn.setFixedSize(90, 30)
         self.import_btn.clicked.connect(lambda: self.parent_window.on_import_cover(self.entry))
         btns.addWidget(self.import_btn)
 
         self.edit_btn = QtWidgets.QPushButton(self.tr("编辑"))
-        self.edit_btn.setFixedHeight(22)
+        self.edit_btn.setFixedSize(70, 30)
         self.edit_btn.clicked.connect(lambda: self.parent_window.show_edit_panel(self.entry))
         btns.addWidget(self.edit_btn)
 
         control.addWidget(self.btn_container)
 
-        self.checkbox = QtWidgets.QCheckBox(self.tr("包含"))
-        self.checkbox.setChecked(self.entry.get('selected', True))
-        self.checkbox.setVisible(False)
-        self.checkbox.stateChanged.connect(
-            lambda state: self.entry.__setitem__('selected', state == QtCore.Qt.Checked)
-        )
-        control.addWidget(self.checkbox)
+        # 忽略按钮：仅在忽略模式下显示，点击即隐藏该游戏
+        self.ignore_btn = QtWidgets.QPushButton(self.tr("忽略"))
+        self.ignore_btn.setFixedHeight(30)
+        self.ignore_btn.setVisible(False)
+        self.ignore_btn.clicked.connect(lambda: self.parent_window.ignore_entry(self.entry))
+        control.addWidget(self.ignore_btn)
         control.addStretch()
 
         v.addLayout(control)
         h.addLayout(v)
 
     def set_ignore_mode(self, ignore_mode):
+        """忽略模式下隐藏其它操作按钮，只显示“忽略”按钮。"""
         self.btn_container.setVisible(not ignore_mode)
-        self.checkbox.setVisible(ignore_mode)
+        self.ignore_btn.setVisible(ignore_mode)
 
     def refresh_text(self):
         self.name_lbl.setText(self.entry.get('app_name', 'Unknown'))
@@ -100,52 +127,85 @@ class ConfirmGameCard(QtWidgets.QFrame):
     def refresh_cover(self):
         cover_bytes = self.entry.get('cover_bytes')
         if not cover_bytes:
-            self.cover_lbl.setPixmap(QtGui.QPixmap())
+            self.cover_lbl.setIcon(QtGui.QIcon())
             self.cover_lbl.setText(self.tr("没有封面"))
             return
 
         pix = QtGui.QPixmap()
         if not pix.loadFromData(cover_bytes):
-            self.cover_lbl.setPixmap(QtGui.QPixmap())
+            self.cover_lbl.setIcon(QtGui.QIcon())
             self.cover_lbl.setText(self.tr("没有封面"))
             return
 
-        self.cover_lbl.setPixmap(
-            pix.scaled(THUMB_SIZE[0], THUMB_SIZE[1], QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
-        )
+        scaled = pix.scaled(THUMB_SIZE[0], THUMB_SIZE[1], QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+        self.cover_lbl.setIcon(QtGui.QIcon(scaled))
+        self.cover_lbl.setIconSize(QtCore.QSize(THUMB_SIZE[0], THUMB_SIZE[1]))
         self.cover_lbl.setText('')
 
-    def on_cover_click(self, event):
+    def on_cover_click(self):
         """点击封面时使用 SGDB 选择封面"""
         self._change_cover_with_sgdb()
 
     def _change_cover_with_sgdb(self):
-        """使用 SGDB 选择封面"""
+        """使用 SGDB 选择封面（内嵌在主窗口中）"""
         app_name = self.entry.get('app_name', 'Unknown')
         exe_path = self.entry.get('target_path', '')
-        
-        # 确定输出路径
-        from basic_def import TEMP_COVERS_DIR
-        import os
-        os.makedirs(TEMP_COVERS_DIR, exist_ok=True)
-        newname = f"sgdb_{uuid.uuid4().hex[:8]}.png"
-        output_path = os.path.join(TEMP_COVERS_DIR, newname)
-        
-        result_bytes, used_icon, sgdb_name = choose_cover_with_sgdb_qt(
-            app_name=app_name,
-            output_path=output_path,
-            exe_path=exe_path
-        )
-        
+
+        # 查找 MainWindow 以使用内嵌封面选择器
+        main_window = self._find_main_window()
+        if main_window is not None and hasattr(main_window, 'show_sgdb_cover_picker'):
+            main_window.show_sgdb_cover_picker(
+                app_name=app_name,
+                exe_path=exe_path,
+                on_result=self._on_sgdb_cover_result,
+            )
+        else:
+            # 降级：使用模态对话框
+            self._change_cover_with_sgdb_legacy(app_name, exe_path)
+
+    def _find_main_window(self):
+        """向上查找包含 show_sgdb_cover_picker 的主窗口"""
+        w = self.parent_window
+        while w is not None:
+            if hasattr(w, 'show_sgdb_cover_picker'):
+                return w
+            w = w.parent()
+        return None
+
+    def _on_sgdb_cover_result(self, result_bytes, used_icon, sgdb_name, newname):
+        """内嵌封面选择器回调"""
         if result_bytes:
             try:
                 self.entry['cover_bytes'] = result_bytes
                 self.entry['image-path'] = newname
                 if sgdb_name:
-                    self.entry['app_name'] = sgdb_name  # 更新名称如果选择了应用 SGDB 名称
+                    self.entry['app_name'] = sgdb_name
                 self.parent_window._refresh_entry_card(self.entry)
             except Exception as e:
-                QtWidgets.QMessageBox.critical(self, 'Error', f'Failed to process SGDB cover: {e}')
+                _cc(self, 'critical', 'Error', f'Failed to process SGDB cover: {e}')
+
+    def _change_cover_with_sgdb_legacy(self, app_name, exe_path):
+        """降级：使用模态对话框选择封面"""
+        from basic_def import TEMP_COVERS_DIR
+        os.makedirs(TEMP_COVERS_DIR, exist_ok=True)
+        newname = f"sgdb_{uuid.uuid4().hex[:8]}.png"
+        output_path = os.path.join(TEMP_COVERS_DIR, newname)
+
+        result_bytes, used_icon, sgdb_name = choose_cover_with_sgdb_qt(
+            app_name=app_name,
+            output_path=output_path,
+            exe_path=exe_path
+        )
+
+        if result_bytes:
+            try:
+                self.entry['cover_bytes'] = result_bytes
+                self.entry['image-path'] = newname
+                if sgdb_name:
+                    self.entry['app_name'] = sgdb_name
+                self.parent_window._refresh_entry_card(self.entry)
+            except Exception as e:
+                _cc(self, 'critical', 'Error', f'Failed to process SGDB cover: {e}')
 
 
 class ConfirmAddWindow(QtWidgets.QWidget):
@@ -261,10 +321,10 @@ class ConfirmAddWindow(QtWidgets.QWidget):
         left_layout.addWidget(self.status_label)
 
         bottom = QtWidgets.QHBoxLayout()
-        self.ignore_btn = QtWidgets.QPushButton(self.tr("选择忽略的应用"))
-        self.ignore_btn.clicked.connect(self._toggle_ignore_mode)
-        self.ignore_btn.setFixedHeight(40)
-        bottom.addWidget(self.ignore_btn)
+        self.ignore_toggle_btn = QtWidgets.QPushButton(self.tr("选择忽略的应用"))
+        self.ignore_toggle_btn.clicked.connect(self._toggle_ignore_mode)
+        self.ignore_toggle_btn.setFixedHeight(48)
+        bottom.addWidget(self.ignore_toggle_btn)
 
         bottom.addStretch()
 
@@ -276,14 +336,14 @@ class ConfirmAddWindow(QtWidgets.QWidget):
         bottom.addWidget(self.restart_hint_label)
 
         self.confirm_btn = QtWidgets.QPushButton(self.tr("写入 Sunshine"))
-        self.confirm_btn.setFixedHeight(40)
+        self.confirm_btn.setFixedHeight(48)
         self.confirm_btn.setFixedWidth(150)
         self.confirm_btn.setEnabled(False)
         self.confirm_btn.clicked.connect(self._on_confirm_clicked)
         bottom.addWidget(self.confirm_btn)
 
         cancel_btn = QtWidgets.QPushButton(self.tr("取消"))
-        cancel_btn.setFixedHeight(40)
+        cancel_btn.setFixedHeight(48)
         cancel_btn.setFixedWidth(100)
         cancel_btn.clicked.connect(self._on_cancel_clicked)
         bottom.addWidget(cancel_btn)
@@ -327,9 +387,9 @@ class ConfirmAddWindow(QtWidgets.QWidget):
 
         btns = QtWidgets.QHBoxLayout()
         save_btn = QtWidgets.QPushButton(self.tr("保存"))
-        save_btn.setFixedSize(80, 26)
+        save_btn.setFixedSize(90, 34)
         cancel_btn = QtWidgets.QPushButton(self.tr("取消"))
-        cancel_btn.setFixedSize(80, 26)
+        cancel_btn.setFixedSize(90, 34)
         save_btn.clicked.connect(self._save_edit)
         cancel_btn.clicked.connect(self._close_edit_panel)
         btns.addStretch()
@@ -428,70 +488,51 @@ class ConfirmAddWindow(QtWidgets.QWidget):
         self.container.setMinimumWidth(viewport_width)
         QtCore.QTimer.singleShot(0, lambda: self.container.updateGeometry())
 
-    def move_entry(self, entry, delta):
-        try:
-            idx = self.pending_entries.index(entry)
-        except ValueError:
-            return
-        new_idx = idx + delta
-        if new_idx < 0 or new_idx >= len(self.pending_entries):
-            return
-        self.pending_entries[idx], self.pending_entries[new_idx] = self.pending_entries[new_idx], self.pending_entries[idx]
-        self._debounce_refresh()
-
     def _toggle_ignore_mode(self):
-        if self.ignore_mode:
-            # 从忽略模式切换回正常模式，处理被忽略的应用
-            ignored_entries = [e for e in self.pending_entries if not e.get('selected', True)]
-        if self.ignore_mode:
-            # 从忽略模式切换回正常模式，处理被忽略的应用
-            ignored_entries = [e for e in self.pending_entries if not e.get('selected', True)]
-            if ignored_entries:
-                # 加载配置
-                import json
-                ignored_apps_str = config.get('Settings', 'ignored_apps', fallback='[]')
-                try:
-                    ignored_apps = json.loads(ignored_apps_str)
-                except json.JSONDecodeError:
-                    ignored_apps = []
-                
-                # 添加到忽略列表
-                for entry in ignored_entries:
-                    app_path = entry.get('target_path', '')
-                    app_name = entry.get('app_name', 'Unknown')
-                    
-                    # 检查是否已存在
-                    exists = any(app.get('path') == app_path for app in ignored_apps)
-                    if not exists and app_path:
-                        ignored_apps.append({
-                            'name': app_name,
-                            'path': app_path
-                        })
-                
-                # 保存配置
-                ignored_apps_str = json.dumps(ignored_apps, ensure_ascii=False)
-                config.set('Settings', 'ignored_apps', ignored_apps_str)
-                save_config()
-                
-                # 使用绿色成功通知而不是弹出对话框
-                from PyQt5.QtWidgets import QApplication
-                app = QApplication.instance()
-                if app:
-                    for w in app.topLevelWidgets():
-                        if hasattr(w, 'log_tab'):
-                            w.log_tab.show_success_notification(
-                                self.tr("已将 %1 个应用添加到忽略列表").replace('%1', str(len(ignored_entries)))
-                            )
-                            break
-            
-            # 从pending_entries中移除被忽略的应用
-            self.pending_entries = [e for e in self.pending_entries if e.get('selected', True)]
-            self._debounce_refresh()
-        
+        """切换忽略模式：进入时卡片只显示“忽略”按钮；退出时恢复其它按钮。"""
         self.ignore_mode = not self.ignore_mode
-        self.ignore_btn.setText(self.tr("完成选择") if self.ignore_mode else self.tr("选择忽略的应用"))
+        self.ignore_toggle_btn.setText(self.tr("完成选择") if self.ignore_mode else self.tr("选择忽略的应用"))
         for card in self._cards:
             card.set_ignore_mode(self.ignore_mode)
+
+    def ignore_entry(self, entry):
+        """点击卡片的“忽略”按钮：将该游戏加入忽略列表并从列表隐藏。"""
+        app_path = entry.get('target_path', '')
+        app_name = entry.get('app_name', 'Unknown')
+
+        # 加入 ignored_apps 配置
+        import json
+        ignored_apps_str = config.get('Settings', 'ignored_apps', fallback='[]')
+        try:
+            ignored_apps = json.loads(ignored_apps_str)
+        except json.JSONDecodeError:
+            ignored_apps = []
+
+        exists = any(app.get('path') == app_path for app in ignored_apps)
+        if not exists and app_path:
+            ignored_apps.append({'name': app_name, 'path': app_path})
+            config.set('Settings', 'ignored_apps', json.dumps(ignored_apps, ensure_ascii=False))
+            save_config()
+
+        # 从 pending_entries 移除并刷新
+        try:
+            self.pending_entries.remove(entry)
+        except ValueError:
+            pass
+        self._cover_stats['total'] = len(self.pending_entries)
+        self.info_label.setText(self.tr("待添加的应用: %1").replace('%1', str(len(self.pending_entries))))
+        self._debounce_refresh()
+
+        # 绿色成功通知
+        from PyQt5.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app:
+            for w in app.topLevelWidgets():
+                if hasattr(w, 'log_tab'):
+                    w.log_tab.show_success_notification(
+                        self.tr("已将“%1”添加到忽略列表").replace('%1', app_name)
+                    )
+                    break
 
     def on_import_cover(self, entry):
         fp, _ = QtWidgets.QFileDialog.getOpenFileName(self, self.tr("选择封面图片"), '', self.tr("图片 (*.jpg *.jpeg *.png *.bmp)"))
@@ -512,7 +553,8 @@ class ConfirmAddWindow(QtWidgets.QWidget):
             entry['image-path'] = newname
             self._refresh_entry_card(entry)
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, self.tr("错误"), self.tr("导入封面失败: %1").replace('%1', str(e)))
+            _cc(self, 'critical', self.tr("错误"),
+                self.tr("导入封面失败: %1").replace('%1', str(e)))
 
     def _start_cover_thread(self):
         if not self.pending_entries:
@@ -604,7 +646,7 @@ class ConfirmAddWindow(QtWidgets.QWidget):
     def _on_confirm_clicked(self):
         selected = [e for e in self.pending_entries if e.get('selected', True)]
         if not selected:
-            QtWidgets.QMessageBox.information(self, self.tr("提示"), self.tr("没有选择任何应用。"))
+            _cc(self, 'information', self.tr("提示"), self.tr("没有选择任何应用。"))
             return
         self.pending_entries = selected
         self.confirmed.emit(selected)
