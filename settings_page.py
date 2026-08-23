@@ -418,9 +418,10 @@ class SettingsPage(QWidget):
             print(f"保存 apply_sgdb_name 失败: {e}")
 
     def on_browse_work_path(self):
-        try:
-            dirname = QFileDialog.getExistingDirectory(self, self.tr("选择工作路径"), basic_def.folder or os.path.expanduser("~"))
-            if dirname:
+        def _on_picked(dirname):
+            if not dirname:
+                return
+            try:
                 dirname = os.path.normpath(dirname).replace('\\', '/')
                 self.work_path_input.setText(dirname)
                 basic_def.folder = dirname
@@ -428,8 +429,20 @@ class SettingsPage(QWidget):
                 if not os.path.isdir(dirname):
                     os.makedirs(dirname, exist_ok=True)
                 basic_def.save_config()
-        except Exception as e:
-            print(f"选择工作路径失败: {e}")
+            except Exception as e:
+                print(f"选择工作路径失败: {e}")
+
+        try:
+            from main import _pick_file
+            _pick_file(self, mode='directory',
+                       initial_path=basic_def.folder or os.path.expanduser("~"),
+                       title=self.tr("选择工作路径"),
+                       on_result=_on_picked)
+        except Exception:
+            dirname = QFileDialog.getExistingDirectory(self, self.tr("选择工作路径"),
+                                                       basic_def.folder or os.path.expanduser("~"))
+            if dirname:
+                _on_picked(dirname)
 
     def on_open_work_path(self):
         """打开工作路径文件夹"""

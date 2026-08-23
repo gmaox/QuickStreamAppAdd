@@ -7,15 +7,15 @@ import win32process
 from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QListWidget,
     QListWidgetItem, QFrame, QMessageBox, QDialog, QFileDialog, QCheckBox,
-    QSizePolicy
+    QSizePolicy, QGridLayout, QApplication, QFileIconProvider
 )
-from PyQt5.QtGui import QFont, QIcon, QFontMetrics
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QFont, QIcon, QFontMetrics, QPixmap
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QFileInfo, QSize
 import basic_def
 from basic_def import runtomain, add_files_to_work_folder_as_shortcuts, notify_run_error, get_covers_dir
 from scanner_add_page import load_scanners
 from scanner_manage_page import run_scanner, _load_ignored_targets, _get_work_folder
-from main import find_main_window
+from main import find_main_window, _pick_file
 
 
 def _cc(widget, card_type, title, message, on_result=None, yes_text=None, no_text=None, default_yes=False):
@@ -217,7 +217,7 @@ class AddGameWindow(QWidget):
         right_title = QLabel(self.tr("运作扫描器"))
         right_title.setFont(QFont("Segoe UI", 16, QFont.Bold))
 
-        add_running_btn = QPushButton(self.tr("添加运行中游戏"))
+        add_running_btn = QPushButton(self.tr("快速添加..."))
         add_running_btn.setFont(QFont("Segoe UI", 10, QFont.Bold))
         add_running_btn.setFixedHeight(34)
         add_running_btn.setStyleSheet(
@@ -681,10 +681,10 @@ class AddGameWindow(QWidget):
         event.acceptProposedAction()
 
     def quick_add_running_game(self):
-        """快速添加运行中游戏"""
+        """快速添加：运行中游戏 / 资源管理器目录程序 / 桌面今日快捷方式"""
         scale = 1.0
         proc_dialog = QDialog(self)
-        proc_dialog.setWindowTitle(self.tr("选择运行中游戏进程"))
+        proc_dialog.setWindowTitle(self.tr("快速添加"))
         proc_dialog.setWindowFlags(Qt.FramelessWindowHint | Qt.Popup)
         proc_dialog.setStyleSheet(f"""
             QDialog {{
@@ -703,14 +703,198 @@ class AddGameWindow(QWidget):
             int(20 * scale)
         )
 
-        label = QLabel(
-            self.tr("选择一个运行中游戏进程，加入到游戏列表。")
-        )
+        label = QLabel(self.tr("选择要添加的项目，加入到游戏列表。"))
         label.setStyleSheet("color: white; font-size: 16px;")
         label.setWordWrap(True)
         vbox.addWidget(label)
 
-        # 枚举所有有前台窗口且不是隐藏的进程
+        first_btn = None  # 记录第一个按钮，用于手柄焦点
+        # 网格列数（自适应：运行中游戏少则2列，多了3列）
+        grid_cols = 3
+
+        # 通用按钮样式
+        item_btn_style = f"""
+            QPushButton {{
+                background-color: #444444;
+                color: white;
+                border-radius: {int(8 * scale)}px;
+                font-size: {int(13 * scale)}px;
+                padding: {int(6 * scale)}px {int(10 * scale)}px {int(6 * scale)}px {int(34 * scale)}px;
+                text-align: left;
+            }}
+            QPushButton:hover {{
+                background-color: #555555;
+            }}
+            QPushButton:focus {{
+                background-color: #2E7D9B;
+                border: 2px solid #66ccff;
+            }}
+        """
+
+        # 底部路径状态栏：仅显示当前聚焦项的完整路径 + 文件夹按钮（手动选择）
+        path_status_label = QLabel("")
+        path_status_label.setStyleSheet(
+            "color: #aaaadd; font-size: 12px; padding: 6px 4px;"
+            "background: transparent;"
+        )
+        path_status_label.setWordWrap(True)
+        path_status_label.setMinimumHeight(20)
+        path_status_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+        # 当前聚焦项的完整路径（供文件夹按钮使用）
+        current_focused_path = [""]
+
+        folder_btn = QPushButton("📂")
+        folder_btn.setFixedSize(32, 32)
+        folder_btn.setFocusPolicy(Qt.StrongFocus)
+        folder_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #666666;"
+            "  color: white;"
+            "  border-radius: 6px;"
+            "  font-size: 16px;"
+            "  padding: 0px;"
+            "}"
+            "QPushButton:hover { background-color: #888888; }"
+            "QPushButton:focus {"
+            "  background-color: #2E7D9B; border: 2px solid #66ccff;"
+            "}"
+        )
+
+        def _open_file_dialog(*_):
+            """根据当前聚焦项打开手动选择对话框"""
+            start_path = current_focused_path[0]
+            start_dir = os.path.dirname(start_path) if start_path and os.path.exists(start_path) else ""
+
+            def _on_picked(selected_file):
+                if selected_file:
+                    # proc_dialog 已在打开选择器前关闭，这里只做添加
+                    self._quick_add_and_notify(selected_file, None)
+
+            # 先关闭快速添加界面，再打开文件选择器（避免弹层遮挡）
+            proc_dialog.accept()
+            _pick_file(self, mode='file',
+                       file_types=['.exe', '.lnk'],
+                       initial_path=start_dir or None,
+                       title=self.tr("手动选择要添加的游戏文件"),
+                       on_result=_on_picked)
+
+        folder_btn.clicked.connect(_open_file_dialog)
+
+        # 状态栏布局：路径标签 + 文件夹按钮
+        status_bar = QHBoxLayout()
+        status_bar.setContentsMargins(0, 6, 0, 0)
+        status_bar.setSpacing(8)
+        status_bar.addWidget(path_status_label, 1)
+        status_bar.addWidget(folder_btn, 0, Qt.AlignRight | Qt.AlignVCenter)
+
+        def _update_path_status(*_):
+            """focusChanged 回调：更新底部路径显示与文件夹按钮起始目录。"""
+            focused = QApplication.focusWidget()
+            if focused is not None and isinstance(focused, QPushButton) and hasattr(focused, '_qa_path'):
+                p = focused._qa_path
+                name = getattr(focused, '_qa_name', '')
+                current_focused_path[0] = p or ""
+                if p:
+                    path_status_label.setText(f"{name}  →  {p}" if name and name != p else p)
+                else:
+                    path_status_label.setText("")
+            else:
+                path_status_label.setText("")
+                # 不清空 current_focused_path，保留最近聚焦项便于文件夹按钮使用
+
+        # 程序图标提取：使用系统关联图标（含 .exe 内嵌图标 / 快捷方式目标图标）
+        icon_provider = QFileIconProvider()
+        icon_cache = {}  # 路径 -> QIcon，避免重复提取
+
+        def _get_icon_for_path(path):
+            """从文件路径提取系统关联图标（缓存）。"""
+            if not path:
+                return None
+            key = path.lower()
+            if key in icon_cache:
+                return icon_cache[key]
+            icon = None
+            try:
+                # QFileIconProvider：.exe 返回内嵌图标，.lnk/.url 返回关联图标
+                icon = icon_provider.icon(QFileInfo(path))
+                if icon is not None:
+                    pix = icon.pixmap(32, 32)
+                    if pix.isNull():
+                        icon = None
+            except Exception:
+                icon = None
+
+            # 退一步：对 .exe 用 QIcon(path)，对 .lnk 用 QFileIconProvider.Drives 之外其它图标
+            if icon is None:
+                try:
+                    alt = QIcon(path)
+                    if not alt.isNull():
+                        icon = alt
+                except Exception:
+                    icon = None
+
+            icon_cache[key] = icon
+            return icon
+
+        def _make_section(title_text, items, empty_text=None):
+            nonlocal first_btn
+            # 分组标题（带计数）
+            count = len(items) if items else 0
+            title_with_count = f"{title_text} ({count})" if count else title_text
+            section_title = QLabel(title_with_count)
+            section_title.setStyleSheet(
+                "color: #66ccff; font-size: 13px; font-weight: bold; padding-top: 6px;"
+            )
+            vbox.addWidget(section_title)
+
+            if not items:
+                if empty_text:
+                    empty_label = QLabel(empty_text)
+                    empty_label.setStyleSheet("color: #999999; font-size: 12px; padding-left: 6px;")
+                    vbox.addWidget(empty_label)
+                return
+
+            grid = QGridLayout()
+            grid.setSpacing(6)
+
+            for i, (item_label, item_path) in enumerate(items):
+                row = i // grid_cols
+                col = i % grid_cols
+
+                # 按钮只显示文件名（不含路径），过长用省略号
+                display_name = os.path.basename(item_path) if item_path else item_label
+                btn = QPushButton(display_name)
+                btn.setFocusPolicy(Qt.StrongFocus)
+                btn.setStyleSheet(item_btn_style)
+                btn.setToolTip(item_path)  # 鼠标悬停显示完整路径
+                # 设置程序图标
+                icon = _get_icon_for_path(item_path)
+                if icon is not None and not icon.isNull():
+                    btn.setIcon(icon)
+                    btn.setIconSize(QSize(20, 20))
+                # 记录路径与名称，供焦点变化时使用
+                btn._qa_path = item_path
+                btn._qa_name = display_name
+                btn.setMinimumHeight(34)
+                btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                # 过长文本截断（不修改 _qa_name，仅按钮显示文本）
+                fm = btn.fontMetrics()
+                max_text_width = 160  # 列宽限制（减去图标占位）
+                if fm.horizontalAdvance(display_name) > max_text_width:
+                    elided = fm.elidedText(display_name, Qt.ElideRight, max_text_width)
+                    btn.setText(elided)
+
+                btn.clicked.connect(
+                    lambda checked, p=item_path: self._quick_add_and_notify(p, proc_dialog)
+                )
+                grid.addWidget(btn, row, col)
+                if first_btn is None:
+                    first_btn = btn
+
+            vbox.addLayout(grid)
+
+        # ===== 第1组：运行中游戏进程 =====
         hwnd_pid_map = {}
         def enum_window_callback(hwnd, lParam):
             if win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd):
@@ -719,7 +903,7 @@ class AddGameWindow(QWidget):
             return True
         win32gui.EnumWindows(enum_window_callback, None)
 
-        proc_list = []
+        proc_items = []
         for proc in psutil.process_iter(['pid', 'name', 'exe']):
             try:
                 pid = proc.info.get('pid')
@@ -732,91 +916,128 @@ class AddGameWindow(QWidget):
                     or name.lower() in ("explorer.exe", "desktopgame.exe", "textinputhost.exe")
                 ):
                     continue
-                proc_list.append(proc)
+                # 标签：进程名；路径：exe 完整路径
+                proc_items.append((name, exe))
             except Exception:
                 continue
 
-        first_btn = None  # 记录第一个按钮，用于手柄焦点
-        if not proc_list:
-            label2 = QLabel(self.tr("没有检测到可用进程"))
-            label2.setStyleSheet("color: white; font-size: 16px;")
-            vbox.addWidget(label2)
-        else:
-            for proc in proc_list:
-                proc_name = proc.info.get('name', self.tr('未知'))
-                proc_exe = proc.info.get('exe', '')
+        _make_section(
+            self.tr("后台运行程序"),
+            proc_items,
+            empty_text=self.tr("没有检测到可用进程"),
+        )
 
-                hbox = QHBoxLayout()
-                hbox.setSpacing(8)
+        # ===== 第2组：当前已开启的资源管理器目录中的程序文件 =====
+        explorer_items = []
+        seen_paths = set()
+        try:
+            import win32com.client
+            import pythoncom
+            pythoncom.CoInitialize()
+            shell = win32com.client.Dispatch("Shell.Application")
+            # 收集所有打开的 explorer 窗口的目录
+            explorer_dirs = []
+            for w in shell.Windows():
+                try:
+                    loc = w.LocationURL
+                    if loc and loc.startswith("file:///"):
+                        path = loc[8:].replace("/", "\\")
+                        if path and os.path.isdir(path):
+                            explorer_dirs.append(path)
+                except Exception:
+                    continue
+            # 去重
+            explorer_dirs = list(dict.fromkeys(explorer_dirs))
+            for d in explorer_dirs:
+                try:
+                    for fn in os.listdir(d):
+                        if fn.lower().endswith((".exe", ".lnk", ".url")):
+                            full = os.path.join(d, fn)
+                            if full.lower() not in seen_paths:
+                                seen_paths.add(full.lower())
+                                # 标签：文件名；路径：完整路径
+                                explorer_items.append((fn, full))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        finally:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
 
-                btn = QPushButton(f"{proc_name} ({proc_exe})")
-                btn.setFocusPolicy(Qt.StrongFocus)
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        background-color: #444444;
-                        color: white;
-                        border-radius: {int(8 * scale)}px;
-                        font-size: {int(14 * scale)}px;
-                        padding: {int(8 * scale)}px;
-                        text-align: left;
-                    }}
-                    QPushButton:hover {{
-                        background-color: #555555;
-                    }}
-                    QPushButton:focus {{
-                        background-color: #2E7D9B;
-                        border: 2px solid #66ccff;
-                    }}
-                """)
-                btn.clicked.connect(
-                    lambda checked, exe=proc_exe: self._quick_add_and_notify(exe, proc_dialog)
-                )
-                hbox.addWidget(btn)
-                if first_btn is None:
-                    first_btn = btn
+        _make_section(
+            self.tr("资源管理器目录程序"),
+            explorer_items,
+            empty_text=self.tr("没有可添加的程序文件"),
+        )
 
-                folder_btn = QPushButton("📁")
-                folder_btn.setFixedSize(32, 32)
-                folder_btn.setFocusPolicy(Qt.StrongFocus)
-                folder_btn.setStyleSheet(
-                    "QPushButton {"
-                    "  background-color: #666666;"
-                    "  color: white;"
-                    "  border-radius: 6px;"
-                    "  font-size: 18px;"
-                    "  padding: 0px;"
-                    "}"
-                    "QPushButton:hover {"
-                    "  background-color: #888888;"
-                    "}"
-                    "QPushButton:focus {"
-                    "  background-color: #2E7D9B;"
-                    "  border: 2px solid #66ccff;"
-                    "}"
-                )
+        # ===== 第3组：桌面今日创建的快捷方式 =====
+        desktop_items = []
+        try:
+            import time
+            today_start = time.time() - (time.time() % 86400)  # UTC 当天 0 点
+            desktop_paths = []
+            try:
+                desktop_paths.append(os.path.join(os.path.expanduser("~"), "Desktop"))
+            except Exception:
+                pass
+            try:
+                public_desktop = os.path.join(os.environ.get("PUBLIC", ""), "Desktop")
+                if os.path.isdir(public_desktop):
+                    desktop_paths.append(public_desktop)
+            except Exception:
+                pass
+            for d in desktop_paths:
+                if not os.path.isdir(d):
+                    continue
+                try:
+                    for fn in os.listdir(d):
+                        if not fn.lower().endswith((".lnk", ".url")):
+                            continue
+                        full = os.path.join(d, fn)
+                        try:
+                            mtime = os.path.getmtime(full)
+                        except OSError:
+                            continue
+                        if mtime >= today_start and full.lower() not in seen_paths:
+                            seen_paths.add(full.lower())
+                            desktop_items.append((fn, full))
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
-                def open_file_dialog(proc_exe=proc_exe):
-                    start_dir = os.path.dirname(proc_exe) if proc_exe and os.path.exists(proc_exe) else ""
-                    file_dialog = QFileDialog(proc_dialog)
-                    file_dialog.setWindowTitle(self.tr("手动选择要添加的游戏文件"))
-                    file_dialog.setNameFilter(self.tr("可执行文件 (*.exe *.lnk)"))
-                    file_dialog.setFileMode(QFileDialog.ExistingFile)
-                    if start_dir:
-                        file_dialog.setDirectory(start_dir)
-                    if file_dialog.exec_():
-                        selected_file = file_dialog.selectedFiles()[0]
-                        self._quick_add_and_notify(selected_file, proc_dialog)
+        _make_section(
+            self.tr("桌面今日快捷方式"),
+            desktop_items,
+            empty_text=self.tr("没有今日新创建的快捷方式"),
+        )
 
-                folder_btn.clicked.connect(
-                    lambda checked, proc_exe=proc_exe: open_file_dialog(proc_exe)
-                )
-                hbox.addWidget(folder_btn)
-                vbox.addLayout(hbox)
+        # 底部路径状态栏（占位，随焦点变化更新）
+        vbox.addStretch()
+        # 顶部加一条分隔线
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("color: #444444;")
+        vbox.addWidget(sep)
+        vbox.addLayout(status_bar)
+
+        # 焦点变化时更新底部路径显示
+        try:
+            app = QApplication.instance()
+            if app is not None:
+                app.focusChanged.connect(_update_path_status)
+                # 对话框关闭时断开，避免泄漏
+                proc_dialog.destroyed.connect(lambda *_: app.focusChanged.disconnect(_update_path_status))
+        except Exception:
+            pass
 
         proc_dialog.setLayout(vbox)
         proc_dialog.show()
 
-        # 将对话框定位到"添加运行中游戏"按钮右上角对齐
+        # 将对话框定位到"快速添加..."按钮右上角对齐
         try:
             btn_pos = self.add_running_btn.mapToGlobal(self.add_running_btn.rect().topLeft())
             dlg_size = proc_dialog.sizeHint()
@@ -826,13 +1047,18 @@ class AddGameWindow(QWidget):
         except Exception:
             pass
 
-        # 手柄支持：将焦点设为第一个进程按钮，使方向键可在弹窗内导航
+        # 手柄支持：将焦点设为第一个按钮
         if first_btn is not None:
-            QTimer.singleShot(0, first_btn.setFocus)
+            QTimer.singleShot(0, lambda: (first_btn.setFocus(), _update_path_status()))
 
-    def _quick_add_and_notify(self, exe_path, dialog):
+    def _quick_add_and_notify(self, exe_path, dialog=None):
         """添加游戏并提示"""
-        dialog.accept()
+        if dialog is not None:
+            try:
+                dialog.accept()
+            except RuntimeError:
+                # 对话框已被销毁（如快速添加界面提前关闭）
+                pass
         result = add_files_to_work_folder_as_shortcuts([exe_path])
         created = len(result.get('created', []))
         skipped = len(result.get('skipped', []))

@@ -87,8 +87,8 @@ Details: %2</translation>
     </message>
     <message>
         <location filename="add_games.py" line="148"/>
-        <source>添加运行中游戏</source>
-        <translation>Add Running Games</translation>
+        <source>快速添加...</source>
+        <translation>Quick Add...</translation>
     </message>
     <message>
         <location filename="add_games.py" line="176"/>
@@ -172,18 +172,43 @@ Output folder: %5</translation>
     </message>
     <message>
         <location filename="add_games.py" line="391"/>
-        <source>选择运行中游戏进程</source>
-        <translation>Select Running Game Process</translation>
+        <source>快速添加</source>
+        <translation>Quick Add</translation>
     </message>
     <message>
         <location filename="add_games.py" line="410"/>
-        <source>选择一个运行中游戏进程，加入到游戏列表。</source>
-        <translation>Select a running game process to add to the game list.</translation>
+        <source>选择要添加的项目，加入到游戏列表。</source>
+        <translation>Select items to add to the game list.</translation>
     </message>
     <message>
         <location filename="add_games.py" line="444"/>
         <source>没有检测到可用进程</source>
         <translation>No available processes detected</translation>
+    </message>
+    <message>
+        <location filename="add_games.py" line="449"/>
+        <source>运行中游戏</source>
+        <translation>Running Games</translation>
+    </message>
+    <message>
+        <location filename="add_games.py" line="470"/>
+        <source>资源管理器目录程序</source>
+        <translation>Explorer Directory Programs</translation>
+    </message>
+    <message>
+        <location filename="add_games.py" line="473"/>
+        <source>没有可添加的程序文件</source>
+        <translation>No program files to add</translation>
+    </message>
+    <message>
+        <location filename="add_games.py" line="492"/>
+        <source>桌面今日快捷方式</source>
+        <translation>Desktop Today Shortcuts</translation>
+    </message>
+    <message>
+        <location filename="add_games.py" line="495"/>
+        <source>没有今日新创建的快捷方式</source>
+        <translation>No shortcuts created today</translation>
     </message>
     <message>
         <location filename="add_games.py" line="449"/>

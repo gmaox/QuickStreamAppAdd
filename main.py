@@ -123,6 +123,33 @@ def find_main_window(widget):
         w = w.parent()
     return None
 
+def _pick_file(widget, mode='file', file_types=None, initial_path=None,
+               title=None, on_result=None, on_cancel=None):
+    """通过父级 MainWindow 的 show_file_picker 内嵌显示自制文件选择器；
+    找不到主窗口时回退到原生 QFileDialog（同步调用回调）。"""
+    mw = find_main_window(widget)
+    if mw is not None and hasattr(mw, 'show_file_picker'):
+        mw.show_file_picker(mode=mode, file_types=file_types,
+                            initial_path=initial_path, title=title,
+                            on_result=on_result, on_cancel=on_cancel)
+        return
+    # 回退：原生 QFileDialog（同步）
+    from PyQt5.QtWidgets import QFileDialog
+    if mode == 'directory':
+        path = QFileDialog.getExistingDirectory(widget, title or '', initial_path or '')
+        if path and on_result:
+            on_result(path)
+        elif on_cancel:
+            on_cancel()
+        return
+    exts = file_types or ['.exe', '.lnk']
+    filt = ' '.join(f'*{e}' for e in exts)
+    path, _ = QFileDialog.getOpenFileName(widget, title or '', initial_path or '', filt)
+    if path and on_result:
+        on_result(path)
+    elif on_cancel:
+        on_cancel()
+
 # 手柄支持（可选模块，加载失败时退化为不可用）
 try:
     from gamepad import (
@@ -526,7 +553,7 @@ class MainWindow(QMainWindow):
         self.translator = QTranslator()
         self._apply_language(basic_def.language)
 
-        self.setWindowTitle("Sunshine App Manager v1.3")
+        self.setWindowTitle("Sunshine App Manager v1.4")
         # 手柄激活标志：未操作手柄前不显示焦点高亮
         self._gamepad_active = False
         self.resize(1080, 480)
@@ -575,6 +602,11 @@ class MainWindow(QMainWindow):
         self._sgdb_cover_page_index = None  # 内嵌 SGDB 封面选择器页面索引
         self._sgdb_cover_prev_index = None  # 打开封面选择器前的页面索引
         self._sgdb_cover_callback = None  # 封面选择完成回调
+        self._file_picker_widget = None  # 内嵌文件选择器引用
+        self._file_picker_page_index = None  # 内嵌文件选择器页面索引
+        self._file_picker_prev_index = None  # 打开文件选择器前的页面索引
+        self._file_picker_callback = None  # 文件选择完成回调
+        self._file_picker_cancel_callback = None  # 文件选择取消回调
         self._modal_confirm_cards = []  # 显示中的确认卡片栈（支持嵌套）
         
         for i, name in enumerate(tab_names):
@@ -1113,6 +1145,13 @@ class MainWindow(QMainWindow):
             self._on_sgdb_cover_cancelled()
             return
 
+        # 3c) 内嵌文件选择器 → 取消返回
+        if (self._file_picker_widget is not None
+                and self._file_picker_page_index is not None
+                and self.stacked.currentIndex() == self._file_picker_page_index):
+            self._on_file_picker_cancelled()
+            return
+
         # 4) 焦点在页面内容中 → 返回侧栏
         if focus is not None and not self.sidebar.isAncestorOf(focus):
             self._focus_sidebar_current()
@@ -1193,6 +1232,9 @@ class MainWindow(QMainWindow):
         if (self._sgdb_cover_page_index is not None
                 and idx == self._sgdb_cover_page_index):
             idx = self._sgdb_cover_prev_index if self._sgdb_cover_prev_index is not None else 0
+        if (self._file_picker_page_index is not None
+                and idx == self._file_picker_page_index):
+            idx = self._file_picker_prev_index if self._file_picker_prev_index is not None else 0
         btn = self.button_group.button(idx) if self.button_group else None
         if btn is None:
             btn = self.button_group.button(0) if self.button_group else None
@@ -1403,7 +1445,80 @@ class MainWindow(QMainWindow):
         self._sgdb_cover_callback = None
         self._sgdb_cover_cancel_callback = None
         self._sgdb_cover_newname = None
-    
+
+    # ---- 内嵌文件选择器 ----
+
+    def show_file_picker(self, mode='file', file_types=None, initial_path=None,
+                         title=None, on_result=None, on_cancel=None):
+        """在主窗口 stacked 中内嵌显示自制文件选择器。
+
+        Args:
+            mode: 'file' 选择文件；'directory' 选择目录
+            file_types: file 模式下的扩展名白名单（如 ['.exe', '.lnk']）
+            initial_path: 起始目录
+            title: 标题
+            on_result: 回调 fn(path)，选择完成时调用
+            on_cancel: 回调 fn()，取消时调用
+        """
+        from custom_file_picker import CustomFilePickerDialog
+
+        self._close_file_picker()
+
+        dlg = CustomFilePickerDialog(
+            mode=mode,
+            file_types=file_types,
+            initial_path=initial_path,
+            title=title,
+            parent=self,
+        )
+        dlg.setWindowFlags(Qt.Widget)
+
+        self._file_picker_widget = dlg
+        self._file_picker_callback = on_result
+        self._file_picker_cancel_callback = on_cancel
+        self._file_picker_prev_index = self.stacked.currentIndex()
+
+        dlg.file_selected.connect(self._on_file_picker_selected)
+        dlg.picker_cancelled.connect(self._on_file_picker_cancelled)
+
+        self._file_picker_page_index = self.stacked.addWidget(dlg)
+        self.stacked.setCurrentIndex(self._file_picker_page_index)
+        # 页面切换后焦点落到文件列表的当前选中项
+        QtCore.QTimer.singleShot(0, dlg._focus_file_list)
+
+    def _on_file_picker_selected(self, path):
+        """内嵌文件选择器：选择完成"""
+        cb = self._file_picker_callback
+        prev = self._file_picker_prev_index
+        self._close_file_picker()
+        if prev is not None:
+            self.stacked.setCurrentIndex(prev)
+        if cb:
+            cb(path)
+
+    def _on_file_picker_cancelled(self):
+        """内嵌文件选择器：取消"""
+        cb = self._file_picker_cancel_callback
+        prev = self._file_picker_prev_index
+        self._close_file_picker()
+        if prev is not None:
+            self.stacked.setCurrentIndex(prev)
+        if cb:
+            cb()
+
+    def _close_file_picker(self):
+        """移除并清理内嵌文件选择器"""
+        if self._file_picker_widget is not None and self._file_picker_page_index is not None:
+            w = self.stacked.widget(self._file_picker_page_index)
+            if w is not None:
+                self.stacked.removeWidget(w)
+                w.deleteLater()
+        self._file_picker_widget = None
+        self._file_picker_page_index = None
+        self._file_picker_prev_index = None
+        self._file_picker_callback = None
+        self._file_picker_cancel_callback = None
+
     def apply_theme(self, theme):
         """应用主题"""
         # 焦点高亮样式：仅在用户操作过手柄后才显示，避免启动时有突兀的高亮

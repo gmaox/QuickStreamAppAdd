@@ -1,10 +1,12 @@
-﻿import json
+import json
 import os
 import sys
 import time
 import uuid
 
 from PyQt5 import QtCore, QtGui, QtWidgets
+
+from main import _pick_file
 
 
 if getattr(sys, 'frozen', False):
@@ -235,18 +237,25 @@ class ScannerAddPage(QtWidgets.QWidget):
         self._update_type_fields()
 
     def _browse_source(self):
-        directory = QtWidgets.QFileDialog.getExistingDirectory(self, self.tr("选择扫描器源文件夹"))
-        if directory:
-            self.source_input.setText(os.path.normpath(directory))
-            # browsing sets the source text which in turn may auto-fill the name
+        def _on_picked(directory):
+            if directory:
+                self.source_input.setText(os.path.normpath(directory))
+                # browsing sets the source text which in turn may auto-fill the name
+
+        _pick_file(self, mode='directory',
+                   title=self.tr("选择扫描器源文件夹"),
+                   on_result=_on_picked)
 
 
     def _browse_emulator(self):
-        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, self.tr("选择模拟器可执行文件"), "", self.tr("可执行文件 (*.exe);;所有文件 (*.*)")
-        )
-        if file_path:
-            self.emulator_input.setText(os.path.normpath(file_path))
+        def _on_picked(file_path):
+            if file_path:
+                self.emulator_input.setText(os.path.normpath(file_path))
+
+        _pick_file(self, mode='file',
+                   file_types=['.exe'],
+                   title=self.tr("选择模拟器可执行文件"),
+                   on_result=_on_picked)
 
     def _update_type_fields(self):
         scanner_type = self.type_combo.currentData()

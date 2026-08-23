@@ -7,7 +7,7 @@ from PyQt5.QtCore import Qt
 
 from scanner_add_page import load_scanners, save_scanners, normalize_scanner
 from scanner_manage_page import run_scanner, _load_ignored_targets
-from main import find_main_window
+from main import find_main_window, _pick_file
 
 
 def _cc(widget, card_type, title, message, on_result=None, yes_text=None, no_text=None, default_yes=False):
@@ -424,16 +424,23 @@ class ScannerPage(QtWidgets.QWidget):
             label.setVisible(visible)
 
     def _browse_source(self):
-        directory = QtWidgets.QFileDialog.getExistingDirectory(self, self.tr("选择扫描器源文件夹"))
-        if directory:
-            self.source_input.setText(os.path.normpath(directory))
+        def _on_picked(directory):
+            if directory:
+                self.source_input.setText(os.path.normpath(directory))
+
+        _pick_file(self, mode='directory',
+                   title=self.tr("选择扫描器源文件夹"),
+                   on_result=_on_picked)
 
     def _browse_emulator(self):
-        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, self.tr("选择模拟器可执行文件"), "", self.tr("可执行文件 (*.exe);;所有文件 (*.*)")
-        )
-        if file_path:
-            self.emulator_input.setText(os.path.normpath(file_path))
+        def _on_picked(file_path):
+            if file_path:
+                self.emulator_input.setText(os.path.normpath(file_path))
+
+        _pick_file(self, mode='file',
+                   file_types=['.exe'],
+                   title=self.tr("选择模拟器可执行文件"),
+                   on_result=_on_picked)
 
     # 常见模拟器参数模板：名称、参数模板、ROM 扩展名
     EMULATOR_TEMPLATES = [

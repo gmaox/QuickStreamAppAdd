@@ -14,7 +14,7 @@ from basic_def import (
     resolve_cover_file_path,
 )
 from sgdb_cover_window import choose_cover_with_sgdb_qt
-from main import find_main_window
+from main import find_main_window, _pick_file
 
 
 def _cc(widget, card_type, title, message, on_result=None, yes_text=None, no_text=None, default_yes=False):
@@ -221,28 +221,33 @@ class EditGameCard(QtWidgets.QFrame):
         self.refresh_cb()
 
     def on_change_cover(self):
-        fp, _ = QtWidgets.QFileDialog.getOpenFileName(self, self.tr("选择封面图片"), '', self.tr("图片 (*.jpg *.jpeg *.png *.bmp)"))
-        if not fp:
-            return
-        try:
-            from PIL import Image
-            img = Image.open(fp)
-            img = img.resize((600, 900), Image.LANCZOS)
-            
-            # 先写入到 temp 目录
-            os.makedirs(TEMP_COVERS_DIR, exist_ok=True)
-            
-            newname = f"custom_{uuid.uuid4().hex[:8]}.png"
-            temp_path = os.path.join(TEMP_COVERS_DIR, newname)
-            img.save(temp_path, 'PNG')
-            
-            self.entry['image-path'] = format_image_path_for_apps_json(newname)
-            save_apps_json(self.apps_json, self.apps_json_path)
-            IMAGE_CACHE.clear()  # clear cache so new thumb used
-            self.refresh_cb()
-        except Exception as e:
-            _cc(self, 'critical', self.tr("错误"),
-                self.tr("更换封面失败: %1").replace('%1', str(e)))
+        def _on_picked(fp):
+            if not fp:
+                return
+            try:
+                from PIL import Image
+                img = Image.open(fp)
+                img = img.resize((600, 900), Image.LANCZOS)
+
+                # 先写入到 temp 目录
+                os.makedirs(TEMP_COVERS_DIR, exist_ok=True)
+
+                newname = f"custom_{uuid.uuid4().hex[:8]}.png"
+                temp_path = os.path.join(TEMP_COVERS_DIR, newname)
+                img.save(temp_path, 'PNG')
+
+                self.entry['image-path'] = format_image_path_for_apps_json(newname)
+                save_apps_json(self.apps_json, self.apps_json_path)
+                IMAGE_CACHE.clear()  # clear cache so new thumb used
+                self.refresh_cb()
+            except Exception as e:
+                _cc(self, 'critical', self.tr("错误"),
+                    self.tr("更换封面失败: %1").replace('%1', str(e)))
+
+        _pick_file(self, mode='file',
+                   file_types=['.jpg', '.jpeg', '.png', '.bmp'],
+                   title=self.tr("选择封面图片"),
+                   on_result=_on_picked)
 
     def _change_cover_with_sgdb(self):
         """使用 SGDB 选择封面（内嵌在主窗口中）"""

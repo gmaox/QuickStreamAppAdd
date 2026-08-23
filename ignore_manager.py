@@ -2,7 +2,7 @@ import os
 import json
 from PyQt5 import QtCore, QtGui, QtWidgets
 from basic_def import config, save_config
-from main import find_main_window
+from main import find_main_window, _pick_file
 
 
 def _cc(widget, card_type, title, message, on_result=None, yes_text=None, no_text=None, default_yes=False):
@@ -106,31 +106,33 @@ class IgnoreManager(QtWidgets.QWidget):
         self.status_label.setText(self.tr("共 %1 个被忽略的应用").replace('%1', str(len(self.ignored_apps))))
 
     def _add_ignored_app(self):
-        # 打开文件对话框选择应用
-        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, self.tr("选择要忽略的应用"), '', self.tr("可执行文件 (*.exe);;所有文件 (*.*)")
-        )
-        if not file_path:
-            return
-
-        app_name = os.path.splitext(os.path.basename(file_path))[0]
-
-        # 检查是否已存在
-        for app in self.ignored_apps:
-            if app.get('path') == file_path:
-                _cc(self, 'information', self.tr("提示"), self.tr("该应用已在忽略列表中"))
+        def _on_picked(file_path):
+            if not file_path:
                 return
 
-        # 添加到列表
-        self.ignored_apps.append({
-            'name': app_name,
-            'path': file_path
-        })
+            app_name = os.path.splitext(os.path.basename(file_path))[0]
 
-        self._save_config()
-        self._refresh_list()
-        _cc(self, 'information', self.tr("成功"),
-            self.tr('已添加 "%1" 到忽略列表').replace('%1', app_name))
+            # 检查是否已存在
+            for app in self.ignored_apps:
+                if app.get('path') == file_path:
+                    _cc(self, 'information', self.tr("提示"), self.tr("该应用已在忽略列表中"))
+                    return
+
+            # 添加到列表
+            self.ignored_apps.append({
+                'name': app_name,
+                'path': file_path
+            })
+
+            self._save_config()
+            self._refresh_list()
+            _cc(self, 'information', self.tr("成功"),
+                self.tr('已添加 "%1" 到忽略列表').replace('%1', app_name))
+
+        _pick_file(self, mode='file',
+                   file_types=['.exe', '.lnk'],
+                   title=self.tr("选择要忽略的应用"),
+                   on_result=_on_picked)
 
     def _remove_selected(self):
         selected_items = self.list_widget.selectedItems()

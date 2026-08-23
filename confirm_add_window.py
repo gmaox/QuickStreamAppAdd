@@ -7,7 +7,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 from basic_def import generate_covers_for_entries, config, save_config, restart_sunshine_after_add, load_config
 from sgdb_cover_window import choose_cover_with_sgdb_qt
-from main import find_main_window
+from main import find_main_window, _pick_file
 
 
 def _cc(widget, card_type, title, message, on_result=None, yes_text=None, no_text=None, default_yes=False):
@@ -231,6 +231,8 @@ class ConfirmAddWindow(QtWidgets.QWidget):
 
         # event to signal that background cover generation should stop
         self._cancel_cover_event = threading.Event()
+        # 仅用于取消 SGDB 阶段，不影响后续图标兜底封面生成
+        self._cancel_sgdb_event = threading.Event()
 
         for e in self.pending_entries:
             e.setdefault('selected', True)
@@ -339,7 +341,9 @@ class ConfirmAddWindow(QtWidgets.QWidget):
         self.confirm_btn.setFixedHeight(48)
         self.confirm_btn.setFixedWidth(150)
         self.confirm_btn.setEnabled(False)
-        self.confirm_btn.clicked.connect(self._on_confirm_clicked)
+        # 统一派发：封面生成期间点击=终止 SGDB；生成完成后点击=写入 Sunshine
+        self._cover_generating = False
+        self.confirm_btn.clicked.connect(self._on_confirm_btn_clicked)
         bottom.addWidget(self.confirm_btn)
 
         cancel_btn = QtWidgets.QPushButton(self.tr("取消"))
@@ -535,26 +539,30 @@ class ConfirmAddWindow(QtWidgets.QWidget):
                     break
 
     def on_import_cover(self, entry):
-        fp, _ = QtWidgets.QFileDialog.getOpenFileName(self, self.tr("选择封面图片"), '', self.tr("图片 (*.jpg *.jpeg *.png *.bmp)"))
-        if not fp:
-            return
+        def _on_picked(fp):
+            if not fp:
+                return
+            try:
+                from PIL import Image
 
-        try:
-            from PIL import Image
+                img = Image.open(fp)
+                img = img.resize((600, 900), Image.LANCZOS)
 
-            img = Image.open(fp)
-            img = img.resize((600, 900), Image.LANCZOS)
+                newname = f'custom_{uuid.uuid4().hex[:8]}.png'
+                buf = BytesIO()
+                img.save(buf, 'PNG')
 
-            newname = f'custom_{uuid.uuid4().hex[:8]}.png'
-            buf = BytesIO()
-            img.save(buf, 'PNG')
+                entry['cover_bytes'] = buf.getvalue()
+                entry['image-path'] = newname
+                self._refresh_entry_card(entry)
+            except Exception as e:
+                _cc(self, 'critical', self.tr("错误"),
+                    self.tr("导入封面失败: %1").replace('%1', str(e)))
 
-            entry['cover_bytes'] = buf.getvalue()
-            entry['image-path'] = newname
-            self._refresh_entry_card(entry)
-        except Exception as e:
-            _cc(self, 'critical', self.tr("错误"),
-                self.tr("导入封面失败: %1").replace('%1', str(e)))
+        _pick_file(self, mode='file',
+                   file_types=['.jpg', '.jpeg', '.png', '.bmp'],
+                   title=self.tr("选择封面图片"),
+                   on_result=_on_picked)
 
     def _start_cover_thread(self):
         if not self.pending_entries:
@@ -562,13 +570,19 @@ class ConfirmAddWindow(QtWidgets.QWidget):
             self.covers_finished.emit()
             return
 
+        # 重置 SGDB 取消标志（支持多次运行）
+        self._cancel_sgdb_event.clear()
+        # 进入"终止封面获取"模式：写入按钮复用为终止 SGDB 入口
+        self._enter_terminate_mode()
+
         def worker():
             image_target_paths, need_choose_cover_names = generate_covers_for_entries(
                 self.pending_entries,
                 self.output_folder,
                 progress_callback=lambda payload: self.cover_progress.emit(payload),
                 cover_ready_callback=lambda entry, source: self.cover_item_ready.emit(entry, source),
-                cancel_event=self._cancel_cover_event
+                cancel_event=self._cancel_cover_event,
+                cancel_sgdb_event=self._cancel_sgdb_event
             )
             self.image_target_paths = image_target_paths
             self.need_choose_cover_names = need_choose_cover_names
@@ -577,8 +591,49 @@ class ConfirmAddWindow(QtWidgets.QWidget):
         self._cover_thread = threading.Thread(target=worker, daemon=True)
         self._cover_thread.start()
 
+    def _enter_terminate_mode(self):
+        """封面生成期间：把"写入 Sunshine"按钮复用为"终止封面获取"。"""
+        self._cover_generating = True
+        self.confirm_btn.setText(self.tr("终止封面获取"))
+        # 不太明显的颜色：暗灰蓝
+        self.confirm_btn.setStyleSheet(
+            "QPushButton { background-color: #6A737D; color: white; "
+            "border: 2px solid transparent; border-radius: 5px; }"
+            "QPushButton:hover { background-color: #5A6570; }"
+            "QPushButton:pressed { background-color: #4A5358; }"
+            "QPushButton:focus { background-color: #66ccff; color: #003344; "
+            "border: 2px solid #66ccff; outline: 2px solid #ffffff; outline-offset: 2px; }"
+            "QPushButton:disabled { background-color: #888; color: #ccc; }"
+        )
+        self.confirm_btn.setEnabled(True)
+
+    def _terminate_sgdb(self):
+        """用户点击"终止封面获取"：仅取消 SGDB 阶段，图标兜底封面继续生成。"""
+        if self._cancel_sgdb_event.is_set():
+            return
+        self._cancel_sgdb_event.set()
+        # 按钮切为"已终止"灰色不可点击，避免重复触发
+        self.confirm_btn.setText(self.tr("已终止"))
+        self.confirm_btn.setStyleSheet('')
+        self.confirm_btn.setEnabled(False)
+        # 状态栏追加提示
+        cur = self.status_label.text()
+        self.status_label.setText(cur + self.tr("  | SGDB 已终止，继续生成图标封面…"))
+
+    def _on_confirm_btn_clicked(self):
+        """按钮统一派发：封面生成中=终止 SGDB；生成完成后=写入 Sunshine。"""
+        if self._cover_generating:
+            self._terminate_sgdb()
+        else:
+            self._on_confirm_clicked()
+
     @QtCore.pyqtSlot()
     def _on_covers_finished(self):
+        # 封面生成结束：恢复按钮为"写入 Sunshine"并启用
+        self._cover_generating = False
+        self.confirm_btn.setText(self.tr("写入 Sunshine"))
+        self.confirm_btn.setStyleSheet('')
+        self.confirm_btn.setEnabled(True)
         done = self._cover_stats.get('done', 0)
         total = self._cover_stats.get('total', len(self.pending_entries))
         success = self._cover_stats.get('success', 0)

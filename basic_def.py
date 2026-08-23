@@ -1537,7 +1537,7 @@ def try_get_sgdb_cover_bytes_for_entry(app_name, target_path, shortcut_file, sgd
     return None, None
 
 
-def generate_covers_for_entries(pending_entries, output_folder, progress_callback=None, cover_ready_callback=None, cancel_event=None):
+def generate_covers_for_entries(pending_entries, output_folder, progress_callback=None, cover_ready_callback=None, cancel_event=None, cancel_sgdb_event=None):
     """
     根据待添加条目的 exe / 图标，生成封面图片（内存模式）。
     优先级：Steam 本地封面 -> SGDB 自动匹配封面 -> 图标生成封面。
@@ -1545,6 +1545,7 @@ def generate_covers_for_entries(pending_entries, output_folder, progress_callbac
     progress_callback(payload): optional callable for progress updates.
     cover_ready_callback(entry, source): optional callable when one entry gets cover bytes.
     cancel_event: threading.Event instance; if set, generation should stop as soon as possible.
+    cancel_sgdb_event: threading.Event instance; if set, SGDB phase is skipped but icon fallback continues.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1652,6 +1653,10 @@ def generate_covers_for_entries(pending_entries, output_folder, progress_callbac
             sgdb_candidates.append(entry)
 
     # 并发执行 SGDB 检索与下载
+    # cancel_sgdb_event: 仅取消 SGDB 阶段，不影响后续图标兜底
+    if cancel_sgdb_event and cancel_sgdb_event.is_set():
+        sgdb_enabled = False
+        _emit("sgdb_cancelled", message="SGDB phase cancelled by user, fallback to icon")
     if sgdb_enabled and sgdb_candidates and net_options is not None:
         max_workers = min(8, len(sgdb_candidates))
         env_workers = os.environ.get("QSAA_SGDB_WORKERS", "").strip()
@@ -1682,6 +1687,9 @@ def generate_covers_for_entries(pending_entries, output_folder, progress_callbac
             # allow individual tasks to abort early
             if cancel_event and cancel_event.is_set():
                 return entry, None, None
+            # SGDB 阶段单独取消：跳过实际请求
+            if cancel_sgdb_event and cancel_sgdb_event.is_set():
+                return entry, None, None
             client = _get_thread_client()
             cover_bytes, sgdb_game_name = try_get_sgdb_cover_bytes_for_entry(
                 app_name=entry["app_name"],
@@ -1695,6 +1703,10 @@ def generate_covers_for_entries(pending_entries, output_folder, progress_callbac
             future_map = {executor.submit(_fetch_sgdb_cover, entry): entry for entry in sgdb_candidates}
             for future in as_completed(future_map):
                 if _check_cancel():
+                    break
+                # SGDB 阶段被取消：停止等待剩余结果，跳到图标兜底
+                if cancel_sgdb_event and cancel_sgdb_event.is_set():
+                    _emit("sgdb_cancelled", message="SGDB phase cancelled, switching to icon fallback")
                     break
                 entry = future_map[future]
                 app_name = entry["app_name"]

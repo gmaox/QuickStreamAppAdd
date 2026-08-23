@@ -603,15 +603,32 @@ class SgdbCoverPickerDialog(QtWidgets.QDialog):
         self._set_status(self.tr("封面保存失败: %1").replace('%1', message))
 
     def _select_local_image(self):
-        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self,
-            self.tr("选择本地图片"),
-            "",
-            self.tr("图片文件 (*.jpg *.jpeg *.png *.bmp *.gif);;所有文件 (*.*)")
-        )
-        if not file_path:
-            return
+        def _on_picked(file_path):
+            if not file_path:
+                return
 
+            try:
+                self._process_local_image(file_path)
+            except Exception as e:
+                self._set_status(self.tr("本地图片处理失败: %1").replace('%1', str(e)))
+
+        # 延迟导入避免循环依赖
+        try:
+            from main import _pick_file
+            _pick_file(self, mode='file',
+                       file_types=['.jpg', '.jpeg', '.png', '.bmp', '.gif'],
+                       title=self.tr("选择本地图片"),
+                       on_result=_on_picked)
+        except Exception:
+            # 回退原生对话框
+            file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self, self.tr("选择本地图片"), "",
+                self.tr("图片文件 (*.jpg *.jpeg *.png *.bmp *.gif);;所有文件 (*.*)")
+            )
+            if file_path:
+                _on_picked(file_path)
+
+    def _process_local_image(self, file_path):
         try:
             with Image.open(file_path) as local_image:
                 if local_image.mode != "RGB":
